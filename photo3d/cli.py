@@ -137,6 +137,13 @@ def grade(rep: dict) -> dict:
 
 
 def main(argv=None):
+    # 윈도우 한글 콘솔(cp949)은 '—' 등 일부 문자를 못 찍어 UnicodeEncodeError 로 멈춘다 → 대체문자로 출력
+    import sys
+    for st in (sys.stdout, sys.stderr):
+        try:
+            st.reconfigure(errors="replace")
+        except Exception:
+            pass
     ap = argparse.ArgumentParser(prog="photo3d", description="폰 사진/동영상 → 실측 3D")
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="전체 파이프라인 실행")
