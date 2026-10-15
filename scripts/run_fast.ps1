@@ -1,7 +1,7 @@
 ﻿# 빠른 미리보기(GPU): 사진/동영상 → 3D 를 3~4분 안에.
 # 사용: powershell -ExecutionPolicy Bypass -File scripts\run_fast.ps1 <사진폴더|영상> [출력폴더]
 # - 특징점·조밀복원: COLMAP CUDA(GPU)
-# - 메쉬·텍스처: OpenMVS 일반판(CPU) — OpenMVS v2.4.0 CUDA판 ReconstructMesh 가 RTX 50(SM 12.0)에서 비정상 종료해서
+# - 조밀복원·메쉬·텍스처: OpenMVS (CUDA판이면 조밀복원 GPU). COLMAP 점군→OpenMVS 경로는 ReconstructMesh 가 종료돼 사용 안 함
 param(
     [Parameter(Mandatory = $true, Position = 0)][string]$Src,
     [Parameter(Position = 1)][string]$Out = ""
@@ -21,17 +21,26 @@ if (-not $colmap) {
     $colmap = Get-ChildItem "$Tp\colmap" -Recurse -Filter COLMAP.bat | Select-Object -First 1
 }
 
-# OpenMVS 일반판(CPU)
-$rm = Get-ChildItem "$Tp\openmvs_cpu" -Recurse -Filter ReconstructMesh.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $rm) {
-    Write-Host "OpenMVS(CPU) 내려받는 중..."
-    Invoke-WebRequest https://github.com/cdcseacave/openMVS/releases/download/v2.4.0/OpenMVS_Windows_x64.zip -OutFile "$Tp\openmvs_cpu.zip"
-    Expand-Archive "$Tp\openmvs_cpu.zip" "$Tp\openmvs_cpu" -Force
-    $rm = Get-ChildItem "$Tp\openmvs_cpu" -Recurse -Filter ReconstructMesh.exe | Select-Object -First 1
+# OpenMVS: CUDA판(조밀복원 GPU)이 있으면 그것, 없으면 일반판(CPU)을 받는다
+$dp = Get-ChildItem "$Tp\openmvs" -Recurse -Filter DensifyPointCloud.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $dp) {
+    $dp = Get-ChildItem "$Tp\openmvs_cpu" -Recurse -Filter DensifyPointCloud.exe -ErrorAction SilentlyContinue | Select-Object -First 1
 }
-$env:OPENMVS_BIN = $rm.DirectoryName
+if (-not $dp) {
+    Write-Host "OpenMVS 내려받는 중..."
+    Invoke-WebRequest https://github.com/cdcseacave/openMVS/releases/download/v2.4.0/OpenMVS_Windows_x64_CUDA.7z -OutFile "$Tp\openmvs.7z"
+    New-Item -ItemType Directory -Force "$Tp\openmvs" | Out-Null
+    tar -xf "$Tp\openmvs.7z" -C "$Tp\openmvs"
+    $dp = Get-ChildItem "$Tp\openmvs" -Recurse -Filter DensifyPointCloud.exe | Select-Object -First 1
+}
+$env:OPENMVS_BIN = $dp.DirectoryName
+Write-Host "OpenMVS: $env:OPENMVS_BIN"
 
-if (-not $Out) { $Out = Join-Path $Root ("out\" + (Split-Path -Leaf $Src) + "_fast") }
+if (-not $Out) {
+    $name = Split-Path -Leaf $Src
+    if ($name -in @("images", "image", "photos", "img")) { $name = Split-Path -Leaf (Split-Path -Parent $Src) }
+    $Out = Join-Path $Root ("out\" + $name + "_fast")
+}
 Write-Host "입력: $Src"
 Write-Host "출력: $Out"
 $ErrorActionPreference = "Continue"  # 파이썬·COLMAP 의 stderr 로그로 멈추지 않게
