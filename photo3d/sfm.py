@@ -24,7 +24,8 @@ FEATURES = {
 
 def _run_cli(colmap: str, image_dir: Path, work: Path, sequential: bool, single_camera: bool,
              camera_model: str, mapper: str, use_gpu: bool, log, features: str = "sift",
-             mask_dir: Path | None = None) -> list[pycolmap.Reconstruction]:
+             mask_dir: Path | None = None, max_side: int = 3200,
+             max_features: int = 12000) -> list[pycolmap.Reconstruction]:
     """COLMAP 4.x 실행파일(윈도우 CUDA 릴리스 등)로 SfM. GPU 로 수 배 빠르고 ALIKED/LightGlue 사용 가능."""
     import subprocess
     db = work / "database.db"
@@ -40,9 +41,9 @@ def _run_cli(colmap: str, image_dir: Path, work: Path, sequential: bool, single_
     ftype = {"sift": ("SIFT", "SIFT_BRUTEFORCE"), "sift_hq": ("SIFT", "SIFT_BRUTEFORCE"),
              "sift_lg": ("SIFT", "SIFT_LIGHTGLUE"), "aliked": ("ALIKED_N16ROT", "ALIKED_LIGHTGLUE")}[features]
     ext = ["--FeatureExtraction.use_gpu", g, "--FeatureExtraction.type", ftype[0],
-           "--FeatureExtraction.max_image_size", "3200"]
+           "--FeatureExtraction.max_image_size", str(max_side)]
     ext += (["--AlikedExtraction.max_num_features", "8000"] if features == "aliked"
-            else ["--SiftExtraction.max_num_features", "12000"])
+            else ["--SiftExtraction.max_num_features", str(max_features)])
     if features == "sift_hq":
         ext += ["--SiftExtraction.estimate_affine_shape", "1", "--SiftExtraction.domain_size_pooling", "1"]
     mat = ["--FeatureMatching.use_gpu", g, "--FeatureMatching.type", ftype[1]]
@@ -60,10 +61,12 @@ def _run_cli(colmap: str, image_dir: Path, work: Path, sequential: bool, single_
     sparse.mkdir(exist_ok=True)
     if mapper == "global":
         run("global_mapper", "--database_path", str(db), "--image_path", str(image_dir),
-            "--output_path", str(sparse))
+            "--output_path", str(sparse),
+            *(["--GlobalMapper.ba_ceres_use_gpu", "1", "--GlobalMapper.gp_use_gpu", "1"] if use_gpu else []))
     else:
         run("mapper", "--database_path", str(db), "--image_path", str(image_dir),
-            "--output_path", str(sparse), "--Mapper.ba_refine_principal_point", "0")
+            "--output_path", str(sparse), "--Mapper.ba_refine_principal_point", "0",
+            *(["--Mapper.ba_use_gpu", "1"] if use_gpu else []))
     logf.close()
     return [pycolmap.Reconstruction(d) for d in sorted(sparse.iterdir()) if (d / "images.bin").exists()]
 
@@ -71,7 +74,8 @@ def _run_cli(colmap: str, image_dir: Path, work: Path, sequential: bool, single_
 def run_sfm(image_dir: Path, work: Path, sequential: bool, single_camera: bool = True,
             camera_model: str = "OPENCV", mapper: str = "incremental", use_gpu: bool = False,
             colmap_bin: str | None = None, features: str = "sift", mask_dir: Path | None = None,
-            refine_pp: bool = False, robust: bool = True, log=print) -> tuple[pycolmap.Reconstruction, dict]:
+            refine_pp: bool = False, robust: bool = True, max_side: int = 3200,
+            max_features: int = 12000, log=print) -> tuple[pycolmap.Reconstruction, dict]:
     work.mkdir(parents=True, exist_ok=True)
     db = work / "database.db"
     if db.exists():
@@ -82,15 +86,16 @@ def run_sfm(image_dir: Path, work: Path, sequential: bool, single_camera: bool =
         if sparse.exists():
             shutil.rmtree(sparse)
         recs = _run_cli(colmap_bin, image_dir, work, sequential, single_camera, camera_model,
-                        mapper, use_gpu, log, features=features, mask_dir=mask_dir)
+                        mapper, use_gpu, log, features=features, mask_dir=mask_dir,
+                        max_side=max_side, max_features=max_features)
         if not recs:
             raise RuntimeError("SfM 실패: 이미지 간 겹침이 부족합니다(사진 간 60~80% 겹치게 촬영)")
         return _finish(dict(enumerate(recs)), n_imgs, log, refine_pp, robust)
     device = pycolmap.Device.cuda if (use_gpu and pycolmap.has_cuda) else pycolmap.Device.cpu
 
     ext = pycolmap.FeatureExtractionOptions()
-    ext.sift.max_num_features = 12000
-    ext.max_image_size = 3200
+    ext.sift.max_num_features = max_features
+    ext.max_image_size = max_side
     mopt = pycolmap.FeatureMatchingOptions()
     # features: sift(기본) | sift_lg(SIFT+LightGlue) | aliked(ALIKED+LightGlue, 반복무늬·저질감에 강함)
     ext_type, match_type = FEATURES[features]

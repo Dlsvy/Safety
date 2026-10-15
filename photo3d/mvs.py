@@ -50,7 +50,8 @@ def _run(args: list[str], cwd: Path, log, logfile: Path):
 
 
 def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
-                     quality: str = "medium", threads: int = 0, log=print) -> dict:
+                     quality: str = "medium", threads: int = 0, engine: str = "openmvs",
+                     colmap_bin: str | None = None, log=print) -> dict:
     q = QUALITY[quality]
     sparse = work / "sparse_georef"
     if sparse.exists():
@@ -73,9 +74,28 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
     common = ["-w", str(mvs), "-v", "2"] + (["--max-threads", str(threads)] if threads else [])
     _run([_bin("InterfaceCOLMAP"), "-i", str(dense), "-o", str(mvs / "scene.mvs"),
           "--image-folder", str(dense / "images")] + common, mvs, log, logf)
-    _run([_bin("DensifyPointCloud"), str(mvs / "scene.mvs"),
-          "--resolution-level", str(q["res"]), "--number-views", str(q["views"]),
-          "--number-views-fuse", "3", "-o", str(mvs / "scene_dense.mvs")] + common, mvs, log, logf)
+    if engine == "colmap":
+        # GPU 조밀복원: COLMAP PatchMatchStereo(CUDA) → StereoFusion → OpenMVS 로 가져와 메쉬·텍스처
+        if not colmap_bin:
+            raise RuntimeError("--dense colmap 은 CUDA 지원 COLMAP 실행파일(--colmap-bin)이 필요합니다")
+        # VRAM 8GB 기준: 원본(-1)은 12MP 이상에서 메모리 부족 위험 → ultra 도 3200px
+        size = {"draft": 1600, "medium": 2400, "high": 3200, "ultra": 3200}[quality]
+        _run([colmap_bin, "patch_match_stereo", "--workspace_path", str(dense),
+              "--workspace_format", "COLMAP", "--PatchMatchStereo.geom_consistency", "1",
+              "--PatchMatchStereo.max_image_size", str(size), "--PatchMatchStereo.gpu_index", "0"],
+             mvs, log, logf)
+        fused = dense / "fused.ply"
+        _run([colmap_bin, "stereo_fusion", "--workspace_path", str(dense), "--workspace_format", "COLMAP",
+              "--input_type", "geometric", "--StereoFusion.max_image_size", str(size),
+              "--output_path", str(fused)], mvs, log, logf)
+        _run([_bin("InterfaceCOLMAP"), "-i", str(dense), "-p", str(fused),
+              "-o", str(mvs / "scene_dense.mvs"), "--image-folder", str(dense / "images")] + common,
+             mvs, log, logf)
+        shutil.copy2(fused, mvs / "scene_dense.ply")
+    else:
+        _run([_bin("DensifyPointCloud"), str(mvs / "scene.mvs"),
+              "--resolution-level", str(q["res"]), "--number-views", str(q["views"]),
+              "--number-views-fuse", "3", "-o", str(mvs / "scene_dense.mvs")] + common, mvs, log, logf)
     # v2.3: ReconstructMesh/RefineMesh 는 메쉬(.ply)만 쓴다 → 다음 단계에 --mesh-file 로 넘긴다
     dense_scene = mvs / "scene_dense.mvs"
     _run([_bin("ReconstructMesh"), str(dense_scene),

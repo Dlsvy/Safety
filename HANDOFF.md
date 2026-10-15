@@ -24,6 +24,14 @@ README.md 에 전체 설명·검증 결과가 있다. 먼저 README 를 읽어�
 5. **유니티**: `unity/` 를 Assets 로 복사, glTFast 설치, 레이어 `Site`·`SiteEstimated` 추가, 메뉴 Photo3D > Import Site Folder.
    스크립트는 컴파일 검증 전.
 
+## GPU 최대 사용 (사용자 요청: "성능이 남아돈다, GPU 를 최대로")
+- 사용자 PC: NVIDIA GeForce RTX(전용 VRAM 8 GB), RAM 32 GB, 설치 직후 GPU 사용률 8%.
+- `python -m photo3d run <입력> --profile gpu-max --colmap-bin %COLMAP_BIN% ...` (run_windows.ps1 기본값)
+  = 원본 해상도(최대 6000px)·특징점 16k·GPU 추출/매칭·GLOMAP+GPU 번들조정·COLMAP PatchMatch(GPU) 조밀복원·ultra.
+- 실행 중 `nvidia-smi -l 2` 로 사용률·VRAM 확인. VRAM 부족이면 `--quality high` 또는 PatchMatch max_image_size 를 낮춘다.
+- 스플래팅은 `scripts/gpu/train_splat.py` (8 GB 에서 30k 스텝 가능 예상, 부족하면 `--steps 15000`).
+- 클라우드에선 GPU 가 없어 이 경로를 한 번도 실행하지 못했다 — 첫 실행에서 오류 나면 고쳐서 커밋할 것.
+
 ## 지켜야 할 것
 - 상업 이용 가능 라이선스만(비상업: MASt3R, π³ 가중치, MILo, 2DGS, PGSR, VGGT 기본 가중치 등 사용 금지 — docs/GPU_PC.md).
 - 새 기법은 실사 벤치마크(eval_strecha.py)로 숫자 확인 후 채택(클라우드에서 sift_hq·refine_pp 는 효과 없어 옵션으로만 둠).

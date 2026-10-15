@@ -58,7 +58,8 @@ def run(a) -> dict:
                               mapper=a.mapper, use_gpu=a.gpu,
                               colmap_bin=a.colmap_bin, features=a.features,
                               mask_dir=Path(a.masks) if a.masks else None, refine_pp=a.refine_pp,
-                              robust=not a.no_robust, log=log)
+                              robust=not a.no_robust, max_side=a.max_side,
+                              max_features=a.max_features, log=log)
     rep["sfm"] = st
 
     log("3/5 축척·좌표 정합")
@@ -73,7 +74,8 @@ def run(a) -> dict:
     cams = np.array([rec.image(i).projection_center() for i in rec.reg_image_ids()])
 
     log(f"4/5 조밀복원·메쉬·텍스처 (품질 {a.quality})")
-    res = mvs.densify_and_mesh(rec, img_dir, work, quality=a.quality, log=log)
+    res = mvs.densify_and_mesh(rec, img_dir, work, quality=a.quality, engine=a.dense,
+                               colmap_bin=a.colmap_bin, log=log)
 
     log("5/5 정리·유니티 내보내기")
     info = export.export_all(res["textured_obj"], out, cams if geo["method"] != "none" else None,
@@ -158,6 +160,11 @@ def main(argv=None):
                    help="강건 모드 끔(기본 켬: 반복무늬 오등록 방지, 실사 정확도 손실 없음)")
     r.add_argument("--refine-pp", action="store_true",
                    help="광학중심까지 보정(실사 벤치마크: 장면 따라 -30%%~+8%% — 기본 끔)")
+    r.add_argument("--profile", choices=["default", "gpu-max"], default="default",
+                   help="gpu-max: 원본 해상도·GPU 특징점/번들조정/조밀복원·ultra 품질 (NVIDIA + CUDA COLMAP 필요)")
+    r.add_argument("--dense", choices=["openmvs", "colmap"], default="openmvs",
+                   help="조밀복원 엔진: openmvs(CPU 가능) / colmap(PatchMatch, CUDA GPU 필요)")
+    r.add_argument("--max-features", type=int, default=12000)
     r.add_argument("--fill", action="store_true",
                    help="빈 곳을 Poisson 으로 메워 site_estimated.glb(추정 영역) 생성 — 측정값 아님")
     r.add_argument("--masks", help="마스크 폴더(<이미지명>.png, 검정=제외) — 움직이는 사람·장비 제거")
@@ -165,6 +172,25 @@ def main(argv=None):
     r.add_argument("--colmap-bin", default=os.environ.get("COLMAP_BIN"),
                    help="COLMAP 실행파일 경로(윈도우 CUDA 릴리스: .../COLMAP.bat). 없으면 pycolmap 사용")
     a = ap.parse_args(argv)
+    if a.cmd == "run" and a.profile == "gpu-max":
+        # GPU 를 최대한 쓰는 설정 — 명시적으로 준 옵션보다 우선하지 않도록 기본값일 때만 바꾼다
+        a.gpu = True
+        if a.max_side == 3200:
+            a.max_side = 6000
+        if a.max_features == 12000:
+            a.max_features = 16000
+        if a.quality == "medium":
+            a.quality = "ultra"
+        if a.mapper == "incremental":
+            a.mapper = "global"
+        if a.video_frames == 150:
+            a.video_frames = 400
+        if a.dense == "openmvs" and a.colmap_bin:
+            a.dense = "colmap"
+        if a.collider_faces == 150_000:
+            a.collider_faces = 300_000
+        if not a.colmap_bin:
+            print("경고: --colmap-bin(CUDA COLMAP)이 없어 특징점·조밀복원은 CPU 로 돈다")
     if a.cmd == "run" and not a.inputs and not a.from_colmap:
         ap.error("사진/동영상 입력 또는 --from-colmap 이 필요합니다")
     if a.cmd == "run":
