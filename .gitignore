@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv*/
+third_party/
+out/
+docs/*_[0-9].png

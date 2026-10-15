@@ -1,0 +1,7 @@
+pycolmap>=3.11
+opencv-contrib-python-headless>=4.8
+numpy
+scipy
+trimesh
+pillow
+fast-simplification
