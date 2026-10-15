@@ -1,4 +1,4 @@
-# 빠른 미리보기(GPU): 사진/동영상 → 3D 를 3~4분 안에.
+﻿# 빠른 미리보기(GPU): 사진/동영상 → 3D 를 3~4분 안에.
 # 사용: powershell -ExecutionPolicy Bypass -File scripts\run_fast.ps1 <사진폴더|영상> [출력폴더]
 # - 특징점·조밀복원: COLMAP CUDA(GPU)
 # - 메쉬·텍스처: OpenMVS 일반판(CPU) — OpenMVS v2.4.0 CUDA판 ReconstructMesh 가 RTX 50(SM 12.0)에서 비정상 종료해서
@@ -34,6 +34,7 @@ $env:OPENMVS_BIN = $rm.DirectoryName
 if (-not $Out) { $Out = Join-Path $Root ("out\" + (Split-Path -Leaf $Src) + "_fast") }
 Write-Host "입력: $Src"
 Write-Host "출력: $Out"
+$ErrorActionPreference = "Continue"  # 파이썬·COLMAP 의 stderr 로그로 멈추지 않게
 $t0 = Get-Date
 Push-Location $Root
 & "$Root\.venv\Scripts\python.exe" -m photo3d run $Src --profile fast --colmap-bin $colmap.FullName --out $Out 2>&1 |

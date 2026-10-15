@@ -1,4 +1,4 @@
-# GPU PC(NVIDIA, Windows) — 가우시안 스플래팅(보기용 레이어) 환경 설치
+﻿# GPU PC(NVIDIA, Windows) — 가우시안 스플래팅(보기용 레이어) 환경 설치
 #   Set-ExecutionPolicy -Scope Process Bypass; .\scripts\gpu\setup_splat_windows.ps1
 # gsplat: Apache-2.0 (상업 사용 가능). CUDA 12.x 드라이버 필요.
 $ErrorActionPreference = "Stop"

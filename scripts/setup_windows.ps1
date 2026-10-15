@@ -1,4 +1,4 @@
-# photo3d 윈도우 설치 (NVIDIA GPU 권장). PowerShell 에서:
+﻿# photo3d 윈도우 설치 (NVIDIA GPU 권장). PowerShell 에서:
 #   Set-ExecutionPolicy -Scope Process Bypass; .\scripts\setup_windows.ps1
 # 설치 내용: Python 가상환경 + COLMAP(CUDA) + OpenMVS 공식 릴리스 바이너리 → .\third_party\
 $ErrorActionPreference = "Stop"

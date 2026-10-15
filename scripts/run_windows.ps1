@@ -1,4 +1,4 @@
-# 사용: .\scripts\run_windows.ps1 <사진폴더|영상> -MarkerSize 0.25 -Out <출력폴더> [-Quality high] [-Gcp gcp.csv] [-Check check.csv]
+﻿# 사용: .\scripts\run_windows.ps1 <사진폴더|영상> -MarkerSize 0.25 -Out <출력폴더> [-Quality high] [-Gcp gcp.csv] [-Check check.csv]
 param(
     [Parameter(Mandatory = $true, Position = 0)][string[]]$Inputs,
     [Parameter(Mandatory = $true)][double]$MarkerSize,
