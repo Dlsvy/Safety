@@ -192,6 +192,8 @@ def main(argv=None):
             a.mapper = "global"
         if a.video_frames == 150:
             a.video_frames = 400
+        if a.dense == "openmvs" and a.colmap_bin:
+            a.dense = "colmap"
         if a.collider_faces == 150_000:
             a.collider_faces = 300_000
         if not a.colmap_bin:
@@ -206,8 +208,10 @@ def main(argv=None):
             a.quality = "draft"
         if a.mapper == "incremental":
             a.mapper = "global"
-        # 조밀복원은 OpenMVS(CUDA 빌드면 GPU). COLMAP fused.ply 를 OpenMVS 로 넘기면
-        # Windows OpenMVS v2.4.0 ReconstructMesh 가 비정상 종료(2026-10 PC 확인) → --dense colmap 은 수동 선택만
+        # 조밀복원은 COLMAP PatchMatch(GPU). OpenMVS v2.4.0 CUDA 빌드의 DensifyPointCloud 는
+        # RTX 50(SM 12.0)에서 GPU 계산 시작 시 종료(PC 확인) → 메쉬·텍스처만 OpenMVS(CPU판)
+        if a.dense == "openmvs" and a.colmap_bin:
+            a.dense = "colmap"
     if a.cmd == "run" and not a.inputs and not a.from_colmap:
         ap.error("사진/동영상 입력 또는 --from-colmap 이 필요합니다")
     if a.cmd == "run":

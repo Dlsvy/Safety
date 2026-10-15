@@ -21,19 +21,15 @@ if (-not $colmap) {
     $colmap = Get-ChildItem "$Tp\colmap" -Recurse -Filter COLMAP.bat | Select-Object -First 1
 }
 
-# OpenMVS: CUDA판(조밀복원 GPU)이 있으면 그것, 없으면 일반판(CPU)을 받는다
-$dp = Get-ChildItem "$Tp\openmvs" -Recurse -Filter DensifyPointCloud.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $dp) {
-    $dp = Get-ChildItem "$Tp\openmvs_cpu" -Recurse -Filter DensifyPointCloud.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+# OpenMVS 일반판(CPU) — 메쉬·텍스처용. CUDA판은 RTX 50 에서 GPU 계산 시 종료해 쓰지 않는다(조밀복원은 COLMAP GPU)
+$rm = Get-ChildItem "$Tp\openmvs_cpu" -Recurse -Filter ReconstructMesh.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $rm) {
+    Write-Host "OpenMVS(CPU) 내려받는 중..."
+    Invoke-WebRequest https://github.com/cdcseacave/openMVS/releases/download/v2.4.0/OpenMVS_Windows_x64.zip -OutFile "$Tp\openmvs_cpu.zip"
+    Expand-Archive "$Tp\openmvs_cpu.zip" "$Tp\openmvs_cpu" -Force
+    $rm = Get-ChildItem "$Tp\openmvs_cpu" -Recurse -Filter ReconstructMesh.exe | Select-Object -First 1
 }
-if (-not $dp) {
-    Write-Host "OpenMVS 내려받는 중..."
-    Invoke-WebRequest https://github.com/cdcseacave/openMVS/releases/download/v2.4.0/OpenMVS_Windows_x64_CUDA.7z -OutFile "$Tp\openmvs.7z"
-    New-Item -ItemType Directory -Force "$Tp\openmvs" | Out-Null
-    tar -xf "$Tp\openmvs.7z" -C "$Tp\openmvs"
-    $dp = Get-ChildItem "$Tp\openmvs" -Recurse -Filter DensifyPointCloud.exe | Select-Object -First 1
-}
-$env:OPENMVS_BIN = $dp.DirectoryName
+$env:OPENMVS_BIN = $rm.DirectoryName
 Write-Host "OpenMVS: $env:OPENMVS_BIN"
 
 if (-not $Out) {
@@ -55,5 +51,9 @@ if (Test-Path $glb) {
     Write-Host "결과: $glb"
     try { Start-Process $glb } catch { Write-Host "기본 3D 뷰어가 없습니다. https://gltf-viewer.donmccurdy.com 에 이 파일을 끌어다 놓으세요." }
 } else {
-    Write-Host "결과 파일이 없습니다 — 위 오류 줄과 $Out\work\openmvs.log 마지막 부분을 보내주세요."
+    Write-Host "결과 파일이 없습니다. 아래 로그 끝부분을 캡처해서 보내주세요."
+    $lf = Join-Path $Out "work\openmvs.log"
+    if (Test-Path $lf) { Write-Host "----- openmvs.log -----"; Get-Content $lf -Tail 15 }
+    $cl = Join-Path $Out "work\sfm\colmap.log"
+    if (Test-Path $cl) { Write-Host "----- colmap.log -----"; Get-Content $cl -Tail 8 }
 }

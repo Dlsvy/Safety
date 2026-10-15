@@ -100,7 +100,8 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
               "--number-views-fuse", "3", "-o", str(mvs / "scene_dense.mvs")] + common, mvs, log, logf)
     # v2.3: ReconstructMesh/RefineMesh 는 메쉬(.ply)만 쓴다 → 다음 단계에 --mesh-file 로 넘긴다
     dense_scene = mvs / "scene_dense.mvs"
-    _run([_bin("ReconstructMesh"), str(dense_scene), "--decimate", str(q["decimate"]),
+    # --decimate 는 Windows OpenMVS v2.4.0 에서 ReconstructMesh 비정상 종료를 일으켜(PC 2회) 쓰지 않는다
+    _run([_bin("ReconstructMesh"), str(dense_scene),
           "-o", str(mvs / "scene_mesh.mvs")] + common, mvs, log, logf)
     mesh = mvs / "scene_mesh.ply"
     if q["refine"]:
