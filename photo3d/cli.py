@@ -167,8 +167,8 @@ def main(argv=None):
                    help="강건 모드 끔(기본 켬: 반복무늬 오등록 방지, 실사 정확도 손실 없음)")
     r.add_argument("--refine-pp", action="store_true",
                    help="광학중심까지 보정(실사 벤치마크: 장면 따라 -30%%~+8%% — 기본 끔)")
-    r.add_argument("--profile", choices=["default", "gpu-max"], default="default",
-                   help="gpu-max: 원본 해상도·GPU 특징점/번들조정/조밀복원·ultra 품질 (NVIDIA + CUDA COLMAP 필요)")
+    r.add_argument("--profile", choices=["default", "gpu-max", "fast"], default="default",
+                   help="fast: GPU 로 3~4분 미리보기(1600px 조밀복원·정제 생략) / gpu-max: 원본 해상도·GPU 특징점/번들조정/조밀복원·ultra 품질 (NVIDIA + CUDA COLMAP 필요)")
     r.add_argument("--dense", choices=["openmvs", "colmap"], default="openmvs",
                    help="조밀복원 엔진: openmvs(CPU 가능) / colmap(PatchMatch, CUDA GPU 필요)")
     r.add_argument("--max-features", type=int, default=12000)
@@ -198,6 +198,18 @@ def main(argv=None):
             a.collider_faces = 300_000
         if not a.colmap_bin:
             print("경고: --colmap-bin(CUDA COLMAP)이 없어 특징점·조밀복원은 CPU 로 돈다")
+    if a.cmd == "run" and a.profile == "fast":
+        a.gpu = True
+        if a.max_side == 3200:
+            a.max_side = 2400
+        if a.max_features == 12000:
+            a.max_features = 8000
+        if a.quality == "medium":
+            a.quality = "draft"
+        if a.mapper == "incremental":
+            a.mapper = "global"
+        if a.dense == "openmvs" and a.colmap_bin:
+            a.dense = "colmap"
     if a.cmd == "run" and not a.inputs and not a.from_colmap:
         ap.error("사진/동영상 입력 또는 --from-colmap 이 필요합니다")
     if a.cmd == "run":

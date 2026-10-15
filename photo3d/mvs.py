@@ -80,13 +80,15 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
             raise RuntimeError("--dense colmap 은 CUDA 지원 COLMAP 실행파일(--colmap-bin)이 필요합니다")
         # VRAM 8GB 기준: 원본(-1)은 12MP 이상에서 메모리 부족 위험 → ultra 도 3200px
         size = {"draft": 1600, "medium": 2400, "high": 3200, "ultra": 3200}[quality]
+        fast = quality == "draft"  # 빠른 모드: 형상 일관성 단계 생략·반복 축소 → 조밀복원 시간 약 1/3
         _run([colmap_bin, "patch_match_stereo", "--workspace_path", str(dense),
-              "--workspace_format", "COLMAP", "--PatchMatchStereo.geom_consistency", "1",
-              "--PatchMatchStereo.max_image_size", str(size), "--PatchMatchStereo.gpu_index", "0"],
+              "--workspace_format", "COLMAP", "--PatchMatchStereo.geom_consistency", "0" if fast else "1",
+              "--PatchMatchStereo.max_image_size", str(size), "--PatchMatchStereo.gpu_index", "0"]
+             + (["--PatchMatchStereo.num_iterations", "3", "--PatchMatchStereo.window_step", "2"] if fast else []),
              mvs, log, logf)
         fused = dense / "fused.ply"
         _run([colmap_bin, "stereo_fusion", "--workspace_path", str(dense), "--workspace_format", "COLMAP",
-              "--input_type", "geometric", "--StereoFusion.max_image_size", str(size),
+              "--input_type", "photometric" if fast else "geometric", "--StereoFusion.max_image_size", str(size),
               "--output_path", str(fused)], mvs, log, logf)
         _run([_bin("InterfaceCOLMAP"), "-i", str(dense), "-p", str(fused),
               "-o", str(mvs / "scene_dense.mvs"), "--image-folder", str(dense / "images")] + common,
@@ -98,7 +100,7 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
               "--number-views-fuse", "3", "-o", str(mvs / "scene_dense.mvs")] + common, mvs, log, logf)
     # v2.3: ReconstructMesh/RefineMesh 는 메쉬(.ply)만 쓴다 → 다음 단계에 --mesh-file 로 넘긴다
     dense_scene = mvs / "scene_dense.mvs"
-    _run([_bin("ReconstructMesh"), str(dense_scene),
+    _run([_bin("ReconstructMesh"), str(dense_scene), "--decimate", str(q["decimate"]),
           "-o", str(mvs / "scene_mesh.mvs")] + common, mvs, log, logf)
     mesh = mvs / "scene_mesh.ply"
     if q["refine"]:
