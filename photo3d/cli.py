@@ -78,13 +78,13 @@ def run(a) -> dict:
                                colmap_bin=a.colmap_bin, log=log)
 
     log("5/5 정리·유니티 내보내기")
-    info = export.export_all(res["textured_obj"], out, cams if geo["method"] != "none" else None,
+    info = export.export_all(res["textured_obj"], out, cams if not geo["method"].startswith("none") else None,
                              collider_faces=a.collider_faces, meta={"georef": geo, "sfm": st}, log=log)
     rep["model"] = info
     if a.fill and res.get("dense_ply"):
         from . import fill
         log("  빈 곳 메우기(Poisson) — 메운 부분은 '추정 영역'으로 분리")
-        fr = fill.fill_holes(res["dense_ply"], out, cams if geo["method"] != "none" else None, log=log)
+        fr = fill.fill_holes(res["dense_ply"], out, cams if not geo["method"].startswith("none") else None, log=log)
         m, est = fr["mesh"], fr["estimated_mask"]
         est_mesh = m.submesh([np.where(est)[0]], append=True) if est.any() else None
         if est_mesh is not None:
@@ -114,7 +114,7 @@ def grade(rep: dict) -> dict:
         issues.append(f"잘못 등록 의심 {rej}장 제외(반복무늬 현장 — 검사점 확인 필수)")
     if s["mean_reprojection_error_px"] > 1.2:
         issues.append(f"재투영오차 {s['mean_reprojection_error_px']:.2f}px")
-    if g["method"] == "none":
+    if g["method"].startswith("none"):
         return {"grade": "D", "reason": "축척 미확정 — 시뮬레이션 사용 불가"}
     errs = [abs(r["error_mm"]) for r in g.get("check_distances", [])]
     errs += [v * 1000 for v in g.get("checkpoint_error_m", {}).values()]

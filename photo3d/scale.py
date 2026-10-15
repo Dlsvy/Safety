@@ -303,6 +303,20 @@ def georeference(rec: pycolmap.Reconstruction, image_dir: Path, marker_size: flo
             "마커/GCP가 없어 실제 축척을 확정할 수 없습니다. 결과의 단위는 임의값입니다. "
             "시뮬레이션용으로는 반드시 마커(권장) 또는 줄자 검증거리를 넣으세요.")
         log("  경고: 마커 미검출 — 축척 미확정(임의 단위)")
+        # 축척은 모르지만 수평은 잡는다: 폰을 대체로 똑바로 들고 찍으므로 카메라 '위'(-Y) 평균 = 하늘 방향
+        ups = []
+        for i in rec.reg_image_ids():
+            Rcw = _pose(rec.image(i))[:, :3]
+            ups.append(-Rcw[1])  # 카메라 -Y 축의 월드 방향
+        up = np.mean(ups, 0)
+        up /= np.linalg.norm(up)
+        x = np.cross([0.0, 1.0, 0.0], up) if abs(up[1]) < 0.9 else np.cross([1.0, 0.0, 0.0], up)
+        x /= np.linalg.norm(x)
+        R = np.stack([x, np.cross(up, x), up])
+        ctr = np.mean([rec.image(i).projection_center() for i in rec.reg_image_ids()], 0)
+        rec.transform(pycolmap.Sim3d(1.0, pycolmap.Rotation3d(R), (-R @ ctr).reshape(3, 1)))
+        report["method"] = "none_leveled"
+        report["warnings"].append("수평만 카메라 방향으로 추정(축척·방위 없음)")
         return report
 
     sim = pycolmap.Sim3d(float(s), pycolmap.Rotation3d(R), np.asarray(t, float).reshape(3, 1))
