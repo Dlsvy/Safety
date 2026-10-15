@@ -3,7 +3,7 @@
 # - 특징점·조밀복원: COLMAP CUDA(GPU)
 # - 메쉬·텍스처: OpenMVS 일반판(CPU) — OpenMVS v2.4.0 CUDA판 ReconstructMesh 가 RTX 50(SM 12.0)에서 비정상 종료해서
 param(
-    [Parameter(Mandatory = $true, Position = 0)][string]$Input,
+    [Parameter(Mandatory = $true, Position = 0)][string]$Src,
     [Parameter(Position = 1)][string]$Out = ""
 )
 $ErrorActionPreference = "Stop"
@@ -31,12 +31,12 @@ if (-not $rm) {
 }
 $env:OPENMVS_BIN = $rm.DirectoryName
 
-if (-not $Out) { $Out = Join-Path $Root ("out\" + (Split-Path -Leaf $Input) + "_fast") }
-Write-Host "입력: $Input"
+if (-not $Out) { $Out = Join-Path $Root ("out\" + (Split-Path -Leaf $Src) + "_fast") }
+Write-Host "입력: $Src"
 Write-Host "출력: $Out"
 $t0 = Get-Date
 Push-Location $Root
-& "$Root\.venv\Scripts\python.exe" -m photo3d run $Input --profile fast --colmap-bin $colmap.FullName --out $Out 2>&1 |
+& "$Root\.venv\Scripts\python.exe" -m photo3d run $Src --profile fast --colmap-bin $colmap.FullName --out $Out 2>&1 |
     Select-String -Pattern "^\[|Error|Traceback|실패"
 Pop-Location
 Write-Host ("총 소요: {0:N1} 분" -f ((Get-Date) - $t0).TotalMinutes)
