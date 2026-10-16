@@ -1,4 +1,4 @@
-# Photo3D GPU 최적 설정 (NVIDIA + Windows) — 관리자 권한으로 실행됨. 바꾸는 것:
+﻿# Photo3D GPU 최적 설정 (NVIDIA + Windows) — 관리자 권한으로 실행됨. 바꾸는 것:
 #  1) GPU 시간 제한(TDR) 2초 → 60초: 화면 출력 GPU 에서 긴 CUDA 계산(조밀복원)이 윈도우에 의해 강제 종료되는 것 방지
 #     HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers  TdrDelay / TdrDdiDelay (DWORD, 초)  ※ 재부팅 후 적용
 #  2) 윈도우 전원 계획 '고성능'
