@@ -387,7 +387,7 @@ function progress(j) {
     return `<li class="${cls}"><span class="ico" aria-hidden="true">${step > k ? "✓" : ""}</span>${t}</li>`;
   }).join("");
   L.el.querySelector(".plog").textContent = j.status === "queued" ? "앞 작업이 끝나면 시작합니다" : (j.last_log || "");
-  if (j.preview_rev && j.preview_rev !== L.rev) { L.rev = j.preview_rev; loadPreview(j.id, L); }
+  if (j.preview_rev && j.preview_rev !== L.rev && !L.loading) { L.rev = j.preview_rev; loadPreview(j.id, L); }
   return L.el;
 }
 setInterval(() => {   // 경과 시간은 1초마다
@@ -397,6 +397,7 @@ setInterval(() => {   // 경과 시간은 1초마다
   }
 }, 1000);
 async function loadPreview(id, L) {
+  L.loading = true;
   try {
     const d = await api(`/api/jobs/${id}/preview`); if (!d.n) return;
     if (!THREE) { THREE = await import("three"); }
@@ -413,11 +414,13 @@ async function loadPreview(id, L) {
       };
       tick();
     }
-    const {root, cam} = L.pv; root.clear();
+    const {root, cam} = L.pv;
+    root.children.forEach((o) => { o.geometry.dispose(); o.material.dispose(); }); root.clear();
     const n = d.n, pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
     let c = [0, 0, 0];
     for (let i = 0; i < n; i++) { c[0] += d.xyz[3*i]; c[1] += d.xyz[3*i+1]; c[2] += d.xyz[3*i+2]; }
     c = c.map((v) => v / n);
+    if (L.pv.kind === d.kind && L.pv.c) c = L.pv.c;   // 같은 단계에서 점이 늘 땐 중심 고정 → 화면이 튀지 않음
     let rad = 0;
     for (let i = 0; i < n; i++) {   // Z-up(측량) → Y-up(화면), 중심을 원점으로
       const x = d.xyz[3*i] - c[0], y = d.xyz[3*i+1] - c[1], z = d.xyz[3*i+2] - c[2];
@@ -433,11 +436,14 @@ async function loadPreview(id, L) {
       const cg = new THREE.BufferGeometry(); cg.setAttribute("position", new THREE.BufferAttribute(cp, 3));
       root.add(new THREE.Points(cg, new THREE.PointsMaterial({size: rad / 40, color: 0xf2b705})));
     }
-    cam.position.set(0, rad * 0.9, rad * 2.2); cam.lookAt(0, 0, 0);
+    if (L.pv.kind !== d.kind || !L.pv.rad || rad > L.pv.rad * 1.15) { L.pv.rad = rad; cam.position.set(0, rad * 0.9, rad * 2.2); cam.lookAt(0, 0, 0); }
+    L.pv.kind = d.kind; L.pv.c = c;
     L.el.querySelector(".cap").textContent = d.kind === "dense"
       ? `조밀 점 ${n.toLocaleString()}개 · 다음: 메쉬·색`
+      : d.kind === "depth"
+      ? `깊이 계산 중 ${d.done}/${d.total}장 · 장마다 점이 늘어납니다`
       : `특징점 ${n.toLocaleString()}개 · 노란 점 = 사진 찍은 위치(${d.cams.length})`;
-  } catch (e) { console.error(e); }
+  } catch (e) { console.error(e); } finally { L.loading = false; }
 }
 
 async function refresh() {

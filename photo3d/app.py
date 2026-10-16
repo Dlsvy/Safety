@@ -107,27 +107,124 @@ def save_job(job: dict) -> None:
     tmp.replace(p)
 
 
+def _depth_dir(d: Path) -> Path | None:
+    p = d / "out" / "work" / "dense" / "stereo" / "depth_maps"
+    return p if p.exists() else None
+
+
 def _preview_source(d: Path) -> Path | None:
-    """처리 중 미리보기용 점: 조밀 점군(COLMAP) > 정합된 희소 점 > 첫 희소 모델"""
+    """처리 중 미리보기용 점: 조밀 점군 > 계산 중인 깊이 지도(GPU) > 정합된 희소 점 > 첫 희소 모델"""
     w = d / "out" / "work"
-    for c in (w / "dense" / "fused.ply", w / "sfm" / "georef" / "points3D.bin"):
-        if c.exists():
-            return c
+    if (w / "dense" / "fused.ply").exists():
+        return w / "dense" / "fused.ply"
+    dd = _depth_dir(d)
+    if dd and any(dd.glob("*.bin")):
+        return dd
+    if (w / "sfm" / "georef" / "points3D.bin").exists():
+        return w / "sfm" / "georef" / "points3D.bin"
     hits = sorted((w / "sfm" / "sparse").glob("*/points3D.bin")) if (w / "sfm" / "sparse").exists() else []
     return hits[0] if hits else None
 
 
+def _preview_rev(src: Path) -> str:
+    """미리보기가 바뀌었는지 판단하는 값 — 깊이 지도는 한 장 늘 때마다 바뀐다"""
+    if src.is_dir():
+        fs = list(src.glob("*.bin"))
+        return f"depth:{len(fs)}:{int(max(f.stat().st_mtime for f in fs))}" if fs else "depth:0"
+    return f"{src.name}:{int(src.stat().st_mtime)}"
+
+
+_DEPTH_CACHE: dict = {}  # 깊이 지도 파일 → (수정시각, 점, 색) — 매번 다시 읽지 않게
+
+
+def _read_colmap_array(p: Path):
+    import numpy as np
+    with open(p, "rb") as f:
+        head = b""
+        while head.count(b"&") < 3:
+            head += f.read(1)
+        w, h, c = map(int, head.decode().split("&")[:3])
+        a = np.fromfile(f, np.float32)
+    return a.reshape((w, h, c), order="F").transpose(1, 0, 2).squeeze()
+
+
+def _depth_points(dd: Path, per_map: int = 4000):
+    """GPU 가 깊이 지도를 한 장씩 끝낼 때마다 그 장의 점을 3D 로 펼쳐 미리보기에 더한다"""
+    import numpy as np
+    import pycolmap
+    from PIL import Image
+    dense = dd.parent.parent
+    key = ("rec", str(dense))
+    if key not in _DEPTH_CACHE:
+        rec = pycolmap.Reconstruction(dense / "sparse")
+        _DEPTH_CACHE[key] = {rec.image(i).name: rec.image(i) for i in rec.reg_image_ids()}, rec
+    by_name, rec = _DEPTH_CACHE[key]
+    files = {}
+    for f in dd.glob("*.bin"):  # 같은 사진은 geometric(최종) 을 photometric(1차) 보다 우선
+        name, kind = f.name.rsplit(".", 2)[0], f.name.rsplit(".", 2)[1]
+        if kind == "geometric" or name not in files:
+            files[name] = f
+    P, C, cams = [], [], []
+    for name, f in files.items():
+        im = by_name.get(name)
+        if im is None:
+            continue
+        mt = f.stat().st_mtime
+        hit = _DEPTH_CACHE.get(f)
+        if not hit or hit[0] != mt:
+            try:
+                D = _read_colmap_array(f)
+            except Exception:  # 아직 쓰는 중인 파일
+                continue
+            cam = rec.camera(im.camera_id)
+            h, w = D.shape
+            sx, sy = w / cam.width, h / cam.height
+            fx, fy, cx, cy = cam.focal_length_x * sx, cam.focal_length_y * sy, cam.principal_point_x * sx, cam.principal_point_y * sy
+            vs, us = np.nonzero(D > 0)
+            if len(us) > per_map:
+                k = np.random.default_rng(0).choice(len(us), per_map, replace=False)
+                vs, us = vs[k], us[k]
+            z = D[vs, us]
+            Xc = np.stack([(us + 0.5 - cx) / fx * z, (vs + 0.5 - cy) / fy * z, z], 1)
+            T = im.cam_from_world() if callable(im.cam_from_world) else im.cam_from_world
+            R, t = T.rotation.matrix(), T.translation
+            Xw = (Xc - t) @ R
+            try:
+                img = np.asarray(Image.open(dense / "images" / name).convert("RGB").resize((w, h)))
+                col = img[vs, us]
+            except Exception:
+                col = np.full((len(Xw), 3), 200)
+            hit = (mt, Xw, col)
+            _DEPTH_CACHE[f] = hit
+        P.append(hit[1]); C.append(hit[2]); cams.append(im.projection_center())
+    if not P:
+        return np.zeros((0, 3)), np.zeros((0, 3)), [], 0, 0
+    return np.concatenate(P), np.concatenate(C), np.array(cams).round(3).tolist(), len(P), len(by_name)
+
+
 def preview_points(d: Path, limit: int = 30000) -> dict:
+    # 처리 중에는 파일이 막 쓰이거나 바뀌는 중일 수 있다 → 실패하면 잠시 뒤 다시(화면은 이전 그림 유지)
+    try:
+        return _preview_points(d, limit)
+    except Exception:
+        return {"n": 0}
+
+
+def _preview_points(d: Path, limit: int = 30000) -> dict:
     import numpy as np
     src = _preview_source(d)
     if src is None:
         return {"n": 0}
-    cams = []
-    if src.suffix == ".ply":
+    cams, kind, extra = [], "sparse", {}
+    if src.is_dir():
+        xyz, rgb, cams, done, total = _depth_points(src)
+        kind, extra = "depth", {"done": done, "total": total}
+    elif src.suffix == ".ply":
         import trimesh
         pc = trimesh.load(src, process=False)
         xyz = np.asarray(pc.vertices, float)
         rgb = np.asarray(pc.colors)[:, :3] if getattr(pc, "colors", None) is not None and len(pc.colors) else np.full((len(xyz), 3), 200)
+        kind = "dense"
     else:
         import pycolmap
         rec = pycolmap.Reconstruction(src.parent)
@@ -142,7 +239,7 @@ def preview_points(d: Path, limit: int = 30000) -> dict:
         lo, hi = np.percentile(xyz, 1, 0), np.percentile(xyz, 99, 0)
         ok = ((xyz >= lo) & (xyz <= hi)).all(1)
         xyz, rgb = xyz[ok], rgb[ok]
-    return {"n": len(xyz), "kind": "dense" if src.suffix == ".ply" else "sparse",
+    return {"n": len(xyz), "kind": kind, **extra,
             "xyz": xyz.round(3).ravel().tolist(), "rgb": rgb.astype(int).ravel().tolist(), "cams": cams}
 
 
@@ -168,7 +265,7 @@ def job_view(job: dict) -> dict:
         human = [ln for ln in lines if "$ " not in ln and ln.strip()]  # 실행 명령(경로 덩어리)은 숨김
         v["last_log"] = re.sub(r"^\[\s*[\d.]+s\]\s*", "", human[-1]).strip()[-160:] if human else ""
         src = _preview_source(d)
-        v["preview_rev"] = f"{src.name}:{int(src.stat().st_mtime)}" if src else None
+        v["preview_rev"] = _preview_rev(src) if src else None
     rep = d / "out" / "report.json"
     if rep.exists():
         try:

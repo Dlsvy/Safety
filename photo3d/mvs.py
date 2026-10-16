@@ -264,7 +264,6 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
         # Windows OpenMVS v2.4 는 사진을 못 읽어 검은 텍스처를 만들었다(PC 3회). 아틀라스 평균은 여백·경계색 때문에
         # 판정이 안 되므로, 면에 실제로 입혀진 색의 밝기를 원본 점군 색과 비교한다.
         try:
-            import numpy as np
             import trimesh
             from .export import load_openmvs_textured_ply
             tm = load_openmvs_textured_ply(obj)
