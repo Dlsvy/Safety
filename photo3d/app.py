@@ -47,6 +47,48 @@ def find_tools() -> dict:
     return {"colmap": str(colmap) if colmap else None, "openmvs": str(mvs.parent) if mvs else None}
 
 
+# ── 예시 사진 ─────────────────────────────────────────
+SAMPLE_REPOS = [  # 공개 시험 사진(연구·시험용 배포) — 없으면 '예시 받기'로 git clone
+    ("strecha", "https://github.com/openMVG/SfM_quality_evaluation.git"),
+    ("sceaux", "https://github.com/openMVG/ImageDataset_SceauxCastle.git"),
+]
+SAMPLE_INFO = {"fountain-P11": "분수대 벽면 11장", "Herz-Jesus-P8": "성당 정면 8장", "Herz-Jesus-P25": "성당 25장",
+               "entry-P10": "건물 입구 10장", "castle-P19": "성 안뜰 19장", "castle-P30": "성 안뜰 한 바퀴 30장",
+               "ImageDataset_SceauxCastle": "성 외벽 11장", "sceaux": "성 외벽 11장"}
+
+
+def list_samples() -> list[dict]:
+    out = []
+    data = ROOT / "data"
+    if not data.exists():
+        return out
+    for d in sorted(data.glob("**/images")):
+        n = len([q for q in d.iterdir() if q.suffix.lower() in {".jpg", ".jpeg", ".png"}])
+        if n >= 5:
+            name = d.parent.name
+            out.append({"name": name, "path": str(d), "count": n, "desc": SAMPLE_INFO.get(name, f"{n}장")})
+    return out
+
+
+_sample_dl = {"state": "idle", "msg": ""}
+
+
+def download_samples() -> None:
+    _sample_dl.update(state="running", msg="예시 사진 받는 중…")
+    try:
+        for name, url in SAMPLE_REPOS:
+            dst = ROOT / "data" / name
+            if dst.exists() and any(dst.iterdir()):
+                continue
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            r = subprocess.run(["git", "clone", "--depth", "1", url, str(dst)], capture_output=True, text=True)
+            if r.returncode != 0:
+                raise RuntimeError(r.stderr.strip()[-200:])
+        _sample_dl.update(state="done", msg=f"예시 {len(list_samples())}개 준비됨")
+    except Exception as e:
+        _sample_dl.update(state="failed", msg=f"받기 실패: {e}")
+
+
 # ── 작업 저장 ─────────────────────────────────────────
 def job_dir(jid: str) -> Path:
     if not re.fullmatch(r"[0-9a-f]{12}", jid):
@@ -151,6 +193,16 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # 조용히
         pass
 
+    def handle_one_request(self):  # 요청 하나가 실패해도 앱은 계속 — 원인은 app.log 에 남긴다
+        try:
+            super().handle_one_request()
+        except (ConnectionError, TimeoutError):
+            pass
+        except Exception:
+            import traceback
+            with open(JOBS.parent / "app.log", "a", encoding="utf-8") as f:
+                f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + self.requestline + "\n" + traceback.format_exc())
+
     def _json(self, obj, code=200):
         b = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
@@ -184,6 +236,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if p in ("/", "/index.html"):
                 return self._file(WEB / "index.html")
+            if p == "/api/samples":
+                return self._json({"samples": list_samples(), "download": _sample_dl})
             if p == "/api/jobs":
                 jobs = []
                 for jd in sorted(JOBS.iterdir(), reverse=True):
@@ -216,6 +270,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         p = unquote(urlparse(self.path).path)
         try:
+            if p == "/api/samples/download":
+                if _sample_dl["state"] != "running":
+                    threading.Thread(target=download_samples, daemon=True).start()
+                    _sample_dl.update(state="running", msg="예시 사진 받는 중…")
+                return self._json({"download": _sample_dl})
             if p == "/api/jobs":
                 b = self._body_json()
                 jid = uuid.uuid4().hex[:12]
@@ -297,7 +356,23 @@ def lan_urls(port: int = 8765) -> list[str]:
     return [f"http://{ip}:{port}" for ip in sorted(ips) if not ip.startswith("127.")]
 
 
+def _no_quickedit() -> None:
+    """윈도우 콘솔의 '빠른 편집' 끄기 — 검은 창을 클릭하면 프로그램이 멈춰 앱 연결이 끊긴다."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.GetStdHandle(-10)  # STD_INPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if k.GetConsoleMode(h, ctypes.byref(mode)):
+            k.SetConsoleMode(h, (mode.value & ~0x0040) | 0x0080)  # QUICK_EDIT 끔, EXTENDED_FLAGS 켬
+    except Exception:
+        pass
+
+
 def main():
+    _no_quickedit()
     port = int(os.environ.get("PHOTO3D_PORT", "8765"))
     # 재시작 시 '처리 중'으로 남은 작업은 실패로 표시(대기열은 메모리라 사라짐)
     for jd in JOBS.iterdir():
@@ -320,7 +395,10 @@ def main():
             webbrowser.open(f"http://localhost:{port}")
         except Exception:
             pass
-    srv.serve_forever()
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":

@@ -41,6 +41,9 @@ button:focus-visible,.btn:focus-visible,input:focus-visible{outline:2px solid va
 .pick label{border:1.5px dashed var(--line);border-radius:10px;padding:16px;text-align:center;cursor:pointer;color:var(--muted)}
 .pick label strong{display:block;color:var(--ink);font-size:15px}
 .pick input{display:none}
+.samples{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:13px;color:var(--muted);margin:0 0 8px}
+.samples button{font-size:13px;font-weight:500;padding:6px 10px}
+.samples button.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);color:var(--ink)}
 .chosen{font-size:13px;color:var(--muted);margin:4px 0 10px}
 .mode{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:0 0 10px}
 .mode label{border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;font-size:13px;color:var(--muted);display:flex;gap:8px;align-items:flex-start}
@@ -103,6 +106,7 @@ details input{margin-top:6px;width:100%}
       <label for="cam"><strong>카메라로 찍기</strong>폰에서 바로 촬영</label>
       <input id="cam" type="file" accept="image/*,video/*" capture="environment" multiple>
     </div>
+    <div class="samples" id="samples"></div>
     <div class="chosen" id="chosen">선택한 파일 없음 · 한쪽 면은 5~6장, 한 바퀴는 15~20장, 또는 1~2분 영상</div>
     <div class="mode" role="radiogroup" aria-label="품질">
       <label><input type="radio" name="mode" value="fast" checked><span><strong>빠르게</strong>약 4~6분 · 미리보기</span></label>
@@ -113,7 +117,7 @@ details input{margin-top:6px;width:100%}
       <input id="scale" type="text" placeholder="줄자 거리: 마커ID1,마커ID2,거리m (예: 0,3,10.25)">
       <input id="msize" type="text" placeholder="ArUco 마커 한 변 길이 m (예: 0.25)">
     </details>
-    <div class="row"><button id="go" class="primary" disabled>올리고 3D 만들기</button></div>
+    <div class="row"><button id="go" class="primary" disabled>3D 만들기</button></div>
     <div class="bar" aria-hidden="true"><i id="prog"></i></div>
     <div class="msg" id="msg" role="status"></div>
     <div class="tip" id="tip"></div>
@@ -160,6 +164,35 @@ $("files").onchange = (e) => setPicked(e.target.files);
 $("cam").onchange = (e) => setPicked([...picked, ...e.target.files]);
 $("lpath").oninput = updateGo;
 
+let sampleSel = null;
+async function loadSamples() {
+  const d = await api("/api/samples").catch(() => null); if (!d) return;
+  const box = $("samples"); box.innerHTML = "";
+  const lab = document.createElement("span"); lab.textContent = "예시 사진:"; box.append(lab);
+  for (const sm of d.samples) {
+    const b = document.createElement("button"); b.type = "button";
+    b.textContent = `${sm.name} · ${sm.desc}`; b.classList.toggle("on", sampleSel === sm.path);
+    b.onclick = () => {
+      sampleSel = sampleSel === sm.path ? null : sm.path;
+      $("lpath").value = sampleSel || ""; if (sampleSel && !$("name").value) $("name").value = "예시 " + sm.name;
+      if (!sampleSel && $("name").value === "예시 " + sm.name) $("name").value = "";
+      $("chosen").textContent = sampleSel ? `예시 ${sm.name} (${sm.count}장) 선택 — 아래 버튼을 누르세요` : "선택한 파일 없음";
+      updateGo(); loadSamples();
+    };
+    box.append(b);
+  }
+  const st = d.download.state;
+  if (st === "running") { const s2 = document.createElement("span"); s2.textContent = d.download.msg; box.append(s2); setTimeout(loadSamples, 3000); }
+  else if (d.samples.length < 7) {
+    const b = document.createElement("button"); b.type = "button";
+    b.textContent = d.samples.length ? "예시 더 받기" : "예시 사진 받기";
+    b.onclick = async () => { await api("/api/samples/download", {method: "POST"}); loadSamples(); };
+    box.append(b);
+    if (st === "failed") { const s2 = document.createElement("span"); s2.textContent = d.download.msg; box.append(s2); }
+  }
+}
+loadSamples();
+
 async function api(path, opt = {}) {
   const r = await fetch(path, opt);
   const j = await r.json().catch(() => ({}));
@@ -169,6 +202,7 @@ async function api(path, opt = {}) {
 
 $("go").onclick = async () => {
   const btn = $("go"); btn.disabled = true; $("msg").textContent = "";
+  if (sampleSel) picked = [];
   try {
     const sc = $("scale").value.trim();
     const job = await api("/api/jobs", {method:"POST", headers:{"Content-Type":"application/json"},
@@ -189,7 +223,7 @@ $("go").onclick = async () => {
     }
     await api(`/api/jobs/${job.id}/start`, {method:"POST"});
     $("msg").textContent = "처리를 시작했습니다. 아래 목록에서 진행 상황을 볼 수 있습니다.";
-    setPicked([]); $("files").value = ""; $("cam").value = ""; $("name").value = ""; $("lpath").value = "";
+    setPicked([]); $("files").value = ""; $("cam").value = ""; $("name").value = ""; $("lpath").value = ""; sampleSel = null; loadSamples();
     refresh();
   } catch (e) { $("msg").textContent = "오류: " + e.message; }
   $("prog").style.width = "0"; updateGo();
