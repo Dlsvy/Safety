@@ -370,7 +370,11 @@ function card(j) {
     const a = document.createElement("a"); a.className = "btn"; a.textContent = "품질 보고서";
     a.href = `/files/${j.id}/quality_report.html`; a.target = "_blank"; a.rel = "noopener"; acts.append(a);
   }
-  if (j.status === "failed") {
+  if (j.status !== "queued") {  // 처리 기록(console.log) — 원인 확인·문의용
+    const a = document.createElement("a"); a.className = "btn"; a.textContent = "처리 기록";
+    a.href = `/api/jobs/${j.id}/log`; a.target = "_blank"; a.rel = "noopener"; acts.append(a);
+  }
+  if (j.status === "failed" || j.status === "done") {
     const b = document.createElement("button"); b.textContent = "다시 처리";
     b.onclick = async () => { await api(`/api/jobs/${j.id}/start`, {method:"POST"}).catch((e) => alertMsg(e)); refresh(); };
     acts.append(b);

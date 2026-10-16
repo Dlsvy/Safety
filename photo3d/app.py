@@ -676,7 +676,7 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/start", p)
             if m:
                 job = load_job(m.group(1))
-                if job["status"] not in ("uploading", "failed"):
+                if job["status"] not in ("uploading", "failed", "done"):
                     return self._json({"error": "이미 처리 중이거나 완료"}, 409)
                 if not job.get("local_path") and not any((job_dir(job["id"]) / "input").iterdir()):
                     return self._json({"error": "올린 파일이 없습니다"}, 400)
