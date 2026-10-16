@@ -178,9 +178,28 @@ def finish_splat(h: dict, out: Path, log=print, max_wait: float | None = None) -
         tail = (h["work"] / "brush.log").read_text(encoding="utf-8", errors="replace").splitlines()[-6:]
         raise RuntimeError("Brush 실패: " + " | ".join(tail))
     dst = out / "site_splat.ply"
-    n = _std_order(plys[-1], dst)
+    raw = h["work"] / "splat_raw.ply"
+    n = _std_order(plys[-1], raw)
+    clean = None
+    dense_ply = h["work"].parent / "dense" / "fused.ply"
+    try:  # 빛 번짐·떠다니는 잡티·바늘 제거(측정된 조밀 점 기준)
+        from .splatclean import clean_file
+        cams = None
+        try:
+            import pycolmap
+            r = pycolmap.Reconstruction(h["work"].parent / "dense" / "sparse")
+            cams = np.array([r.image(i).projection_center() for i in r.reg_image_ids()])
+        except Exception:
+            pass
+        clean = clean_file(raw, dense_ply, dst, cams, log=log) if dense_ply.exists() else None
+    except Exception as e:
+        log(f"  스플랫 정리 생략: {e}")
+    if clean is None:
+        shutil.copy2(raw, dst)
+    else:
+        n = clean["after"]
     log(f"  스플랫 {n:,}개 → {dst.name} ({dst.stat().st_size / 1e6:.0f} MB)")
-    return {"file": dst.name, "splats": n, "steps": int(plys[-1].stem.split("_")[-1]), "up_axis": "Z",
+    return {"file": dst.name, "splats": n, "clean": clean, "steps": int(plys[-1].stem.split("_")[-1]), "up_axis": "Z",
             "note": "보기용. 메쉬 GLB(Y-up)와 맞추려면 X축 -90° 회전"}
 
 

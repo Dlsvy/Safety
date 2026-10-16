@@ -153,7 +153,14 @@ def write(out: Path, rep: dict, work: Path, log=print) -> Path:
         row("3D 생성", "메운(추정) 면적", f"{er:.0%}", _lvl(er, 0.15, 0.35, False), "측정이 아닌 부분 — 유니티에서 경고 레이어")
     sp = rep.get("splat") or {}
     if sp.get("splats"):
-        row("3D 생성", "실사(가우시안 스플래팅)", f"{sp['splats']:,}개 · {sp.get('minutes', '?')}분", INFO, f"{sp['steps']:,}스텝")
+        n = sp["splats"]
+        row("3D 생성", "실사(가우시안 스플래팅)", f"{n:,}개 · {sp.get('minutes', '?')}분",
+            WARN if n < 300_000 else INFO,
+            f"{sp['steps']:,}스텝" + (" · 30만 개 미만이면 흐릿함 — 사진을 더 촘촘히" if n < 300_000 else ""))
+        cl = sp.get("clean") or {}
+        if cl.get("before"):
+            rm = ", ".join(f"{k} {v:,}" for k, v in cl["removed"].items() if v)
+            row("3D 생성", "스플랫 정리(빛 번짐·잡티)", f"{cl['before'] - cl['after']:,}개 제거", INFO, rm or "제거 없음")
 
     gr = rep.get("grade", {})
     counts = {k: sum(1 for r in rows if r[3] == k) for k in (GOOD, WARN, BAD)}

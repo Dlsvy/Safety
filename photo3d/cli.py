@@ -50,6 +50,8 @@ def run(a) -> dict:
         os.environ["PHOTO3D_MOGE_SIDE"] = str(plan["moge_side"])
         if a.splat_res == 1920:
             a.splat_res = plan["splat_res"]
+            if a.profile == "gpu-max" and plan["vram_gb"] >= 7:  # 최고 품질: 학습 해상도↑(선명도), 8GB 에서 2560px
+                a.splat_res = max(a.splat_res, 2560)
         log(f"  VRAM {plan['vram_gb']}GB 맞춤: 조밀복원 최대 {plan['pm_max']}px · 스플랫 최대 {plan['splats']:,}개 · "
             f"학습 해상도 {a.splat_res}px · 깊이 모델 {plan['moge']}" + (" (다른 프로그램이 VRAM 사용 중 → 낮춤)" if plan.get("busy") else ""))
     rep["gpu"] = {"info": g, "plan": plan}
