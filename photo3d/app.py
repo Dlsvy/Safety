@@ -107,21 +107,68 @@ def save_job(job: dict) -> None:
     tmp.replace(p)
 
 
+def _preview_source(d: Path) -> Path | None:
+    """처리 중 미리보기용 점: 조밀 점군(COLMAP) > 정합된 희소 점 > 첫 희소 모델"""
+    w = d / "out" / "work"
+    for c in (w / "dense" / "fused.ply", w / "sfm" / "georef" / "points3D.bin"):
+        if c.exists():
+            return c
+    hits = sorted((w / "sfm" / "sparse").glob("*/points3D.bin")) if (w / "sfm" / "sparse").exists() else []
+    return hits[0] if hits else None
+
+
+def preview_points(d: Path, limit: int = 30000) -> dict:
+    import numpy as np
+    src = _preview_source(d)
+    if src is None:
+        return {"n": 0}
+    cams = []
+    if src.suffix == ".ply":
+        import trimesh
+        pc = trimesh.load(src, process=False)
+        xyz = np.asarray(pc.vertices, float)
+        rgb = np.asarray(pc.colors)[:, :3] if getattr(pc, "colors", None) is not None and len(pc.colors) else np.full((len(xyz), 3), 200)
+    else:
+        import pycolmap
+        rec = pycolmap.Reconstruction(src.parent)
+        pts = list(rec.points3D.values())
+        xyz = np.array([p.xyz for p in pts], float).reshape(-1, 3)
+        rgb = np.array([p.color for p in pts], float).reshape(-1, 3)
+        cams = np.array([rec.image(i).projection_center() for i in rec.reg_image_ids()]).round(3).tolist()
+    if len(xyz) > limit:
+        sel = np.random.default_rng(0).choice(len(xyz), limit, replace=False)
+        xyz, rgb = xyz[sel], rgb[sel]
+    if len(xyz) > 50:  # 튀는 점 제거(미리보기 범위 안정화)
+        lo, hi = np.percentile(xyz, 1, 0), np.percentile(xyz, 99, 0)
+        ok = ((xyz >= lo) & (xyz <= hi)).all(1)
+        xyz, rgb = xyz[ok], rgb[ok]
+    return {"n": len(xyz), "kind": "dense" if src.suffix == ".ply" else "sparse",
+            "xyz": xyz.round(3).ravel().tolist(), "rgb": rgb.astype(int).ravel().tolist(), "cams": cams}
+
+
 def job_view(job: dict) -> dict:
     d = job_dir(job["id"])
     v = dict(job)
     log = d / "out" / "run.log"
     if job["status"] == "running" and log.exists():
         lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
-        stage = None
+        stage, step = None, 0
         for ln in lines:
-            mm = re.search(r"\]\s+(\d/5)\s", ln)
+            mm = re.search(r"\]\s+(\d)/5\s", ln)
             if mm:
-                stage = dict(STAGES).get(mm.group(1))
-                stage = f"{mm.group(1)} {stage}"
+                step = int(mm.group(1))
+                stage = f"{step}/5 {dict(STAGES).get(f'{step}/5')}"
+            elif "구멍 메우기" in ln:
+                step, stage = 6, "구멍 메우기"
+            elif "가우시안 스플래팅" in ln:
+                step, stage = 7, "실사(스플래팅) 학습"
         if stage:
             v["stage"] = stage
-        v["last_log"] = lines[-1][-160:] if lines else ""
+        v["step"] = step
+        human = [ln for ln in lines if "$ " not in ln and ln.strip()]  # 실행 명령(경로 덩어리)은 숨김
+        v["last_log"] = re.sub(r"^\[\s*[\d.]+s\]\s*", "", human[-1]).strip()[-160:] if human else ""
+        src = _preview_source(d)
+        v["preview_rev"] = f"{src.name}:{int(src.stat().st_mtime)}" if src else None
     rep = d / "out" / "report.json"
     if rep.exists():
         try:
@@ -157,6 +204,7 @@ def worker() -> None:
 def run_job(jid: str) -> None:
     d = job_dir(jid)
     job = load_job(jid)
+    shutil.rmtree(d / "out", ignore_errors=True)  # 다시 처리: 이전 결과·미리보기를 지우고 새로
     job.update(status="running", started=time.time())
     save_job(job)
     tools = find_tools()
@@ -248,6 +296,9 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})", p)
             if m:
                 return self._json(job_view(load_job(m.group(1))))
+            m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/preview", p)
+            if m:
+                return self._json(preview_points(job_dir(m.group(1))))
             m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/log", p)
             if m:
                 return self._file(job_dir(m.group(1)) / "console.log", "text/plain; charset=utf-8")

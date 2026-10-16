@@ -73,6 +73,21 @@ details input{margin-top:6px;width:100%}
 .err{white-space:pre-wrap;font-family:var(--mono);font-size:12px;color:var(--bad);grid-column:1/-1;margin:0;
   max-height:120px;overflow:auto}
 .empty{color:var(--muted);text-align:center;padding:30px}
+.prog{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:14px;border-top:1px solid var(--line);padding-top:10px;margin-top:2px}
+.steps{list-style:none;margin:0;padding:0;display:grid;gap:5px;font-size:13px}
+.steps li{display:flex;align-items:center;gap:8px;color:var(--muted)}
+.steps li.done{color:var(--ink)} .steps li.cur{color:var(--ink);font-weight:600}
+.ico{width:16px;height:16px;flex:none;border-radius:50%;border:2px solid var(--line);box-sizing:border-box;display:inline-grid;place-items:center;font-size:10px}
+.done .ico{background:var(--ok);border-color:var(--ok);color:#fff}
+.cur .ico{border-color:var(--line);border-top-color:var(--accent);border-right-color:var(--accent);animation:spin .9s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.cur .ico{animation-duration:3s}}
+.plog{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pel{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:4px}
+.pv{position:relative;height:180px;border-radius:8px;background:#0f1113;overflow:hidden}
+.pv canvas{width:100%;height:100%;display:block}
+.pv .cap{position:absolute;left:8px;bottom:6px;font-size:11.5px;color:#cfd3d8}
+@media (max-width:560px){.prog{grid-template-columns:1fr}}
 @media (max-width:560px){.job{grid-template-columns:64px 1fr}.job img,.job .ph{width:64px;height:48px}.acts{grid-column:1/-1;justify-content:flex-start}}
 /* 뷰어 */
 #viewer{position:fixed;inset:0;background:#101214;display:none;z-index:10}
@@ -289,6 +304,7 @@ function card(j) {
       else { b.dataset.sure = 1; b.textContent = "정말 삭제"; } };
     acts.append(b);
   }
+  if (j.status === "running" || j.status === "queued") el.append(progress(j));
   if (j.status === "failed" && j.error) {
     const pre = document.createElement("pre"); pre.className = "err"; pre.textContent = j.error; el.append(pre);
   }
@@ -296,12 +312,85 @@ function card(j) {
 }
 function alertMsg(e){ $("msg").textContent = "오류: " + e.message; }
 
+/* ── 처리 중 진행 표시: 단계(돌아가는 표시) + 경과 시간 + 회전하는 3D 점 미리보기 ── */
+const STEPS = ["입력 정리", "카메라 위치 계산", "축척·좌표", "3D 생성(조밀·메쉬·색)", "유니티 파일", "구멍 메우기", "실사(스플래팅) 학습"];
+const live = new Map();   // job id → {el, pv}
+function progress(j) {
+  let L = live.get(j.id);
+  if (!L) {
+    const el = document.createElement("div"); el.className = "prog";
+    el.innerHTML = `<div><ol class="steps"></ol><div class="pel"></div><div class="plog"></div></div>
+      <div class="pv"><canvas></canvas><div class="cap">카메라 위치를 계산하면 3D 점이 여기에 나타납니다</div></div>`;
+    L = {el, pv: null, rev: null, started: j.started}; live.set(j.id, L);
+  }
+  L.started = j.started;
+  const step = j.status === "queued" ? 0 : Math.max(1, j.step || 1);
+  const steps = STEPS;
+  L.el.querySelector(".steps").innerHTML = steps.map((t, i) => {
+    const k = i + 1, cls = step > k ? "done" : step === k ? "cur" : "";
+    return `<li class="${cls}"><span class="ico" aria-hidden="true">${step > k ? "✓" : ""}</span>${t}</li>`;
+  }).join("");
+  L.el.querySelector(".plog").textContent = j.status === "queued" ? "앞 작업이 끝나면 시작합니다" : (j.last_log || "");
+  if (j.preview_rev && j.preview_rev !== L.rev) { L.rev = j.preview_rev; loadPreview(j.id, L); }
+  return L.el;
+}
+setInterval(() => {   // 경과 시간은 1초마다
+  for (const L of live.values()) if (L.started) {
+    const s = Math.floor(Date.now() / 1000 - L.started);
+    L.el.querySelector(".pel").textContent = `경과 ${Math.floor(s / 60)}분 ${String(s % 60).padStart(2, "0")}초`;
+  }
+}, 1000);
+async function loadPreview(id, L) {
+  try {
+    const d = await api(`/api/jobs/${id}/preview`); if (!d.n) return;
+    if (!THREE) { THREE = await import("three"); }
+    if (!L.pv) {
+      const cv = L.el.querySelector("canvas");
+      const r = new THREE.WebGLRenderer({canvas: cv, antialias: true}); r.setPixelRatio(Math.min(devicePixelRatio, 2));
+      const sc = new THREE.Scene(), cam = new THREE.PerspectiveCamera(45, 1, 0.01, 1e5), root = new THREE.Group();
+      sc.add(root); L.pv = {r, sc, cam, root, a: 0};
+      const tick = () => {
+        if (!live.has(id)) { r.dispose(); return; }
+        const w = cv.clientWidth, h = cv.clientHeight;
+        if (w && (cv.width !== Math.floor(w * r.getPixelRatio()))) { r.setSize(w, h, false); cam.aspect = w / h; cam.updateProjectionMatrix(); }
+        L.pv.a += 0.004; root.rotation.y = L.pv.a; r.render(sc, cam); requestAnimationFrame(tick);
+      };
+      tick();
+    }
+    const {root, cam} = L.pv; root.clear();
+    const n = d.n, pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+    let c = [0, 0, 0];
+    for (let i = 0; i < n; i++) { c[0] += d.xyz[3*i]; c[1] += d.xyz[3*i+1]; c[2] += d.xyz[3*i+2]; }
+    c = c.map((v) => v / n);
+    let rad = 0;
+    for (let i = 0; i < n; i++) {   // Z-up(측량) → Y-up(화면), 중심을 원점으로
+      const x = d.xyz[3*i] - c[0], y = d.xyz[3*i+1] - c[1], z = d.xyz[3*i+2] - c[2];
+      pos[3*i] = x; pos[3*i+1] = z; pos[3*i+2] = -y; rad = Math.max(rad, Math.hypot(x, y, z) * 0.8);
+      col[3*i] = d.rgb[3*i] / 255; col[3*i+1] = d.rgb[3*i+1] / 255; col[3*i+2] = d.rgb[3*i+2] / 255;
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(pos, 3)); g.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    root.add(new THREE.Points(g, new THREE.PointsMaterial({size: d.kind === "dense" ? rad / 250 : rad / 120, vertexColors: true})));
+    if (d.cams.length) {   // 카메라 위치(노란 점)
+      const cp = new Float32Array(d.cams.length * 3);
+      d.cams.forEach((p, i) => { cp[3*i] = p[0] - c[0]; cp[3*i+1] = p[2] - c[2]; cp[3*i+2] = -(p[1] - c[1]); });
+      const cg = new THREE.BufferGeometry(); cg.setAttribute("position", new THREE.BufferAttribute(cp, 3));
+      root.add(new THREE.Points(cg, new THREE.PointsMaterial({size: rad / 40, color: 0xf2b705})));
+    }
+    cam.position.set(0, rad * 0.9, rad * 2.2); cam.lookAt(0, 0, 0);
+    L.el.querySelector(".cap").textContent = d.kind === "dense"
+      ? `조밀 점 ${n.toLocaleString()}개 · 다음: 메쉬·색`
+      : `특징점 ${n.toLocaleString()}개 · 노란 점 = 사진 찍은 위치(${d.cams.length})`;
+  } catch (e) { console.error(e); }
+}
+
 async function refresh() {
   try {
     const d = await api("/api/jobs");
     const list = $("list"); list.replaceChildren();
     if (!d.jobs.length) list.innerHTML = `<div class="empty">아직 만든 3D 가 없습니다. 위에서 사진이나 영상을 올려 보세요.</div>`;
     d.jobs.forEach((j) => list.append(card(j)));
+    for (const id of [...live.keys()]) if (!d.jobs.some((j) => j.id === id && (j.status === "running" || j.status === "queued"))) live.delete(id);
     const lan = d.lan.length ? `같은 와이파이의 폰에서 접속: <span class="lan">${d.lan.join("  ")}</span>` : "";
     const gpu = d.tools.colmap ? "GPU(COLMAP) 사용" : "CPU 로 처리(느림)";
     $("tip").innerHTML = `${lan}${lan ? " · " : ""}${gpu}`;
