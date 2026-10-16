@@ -42,6 +42,8 @@ README.md 에 전체 설명·검증 결과가 있다. 먼저 README 를 읽어�
   - ETH3D delivery_area(야외 산업현장, 레이저 정답): 엄격 정리로 5cm F1 58→71%, 중앙 오차 62→26mm. 등록 44/44, 0.38px.
   - ETH3D office: 5cm 안 비율 75.7→90.8%, 중앙 오차 19.9→9.4mm, F1 유지(64.9→66.1).
   - ODM Aukerman(드론 77장, GPS): 등록 77/77, 0.83px, GPS 축척 맞춤 오차 1.44m(일반 GPS), 정사영상 8cm/px.
+- 2026-10-16 수정: 충돌 메쉬(site_collider)가 텍스처 이음새마다 찢어져 있던 문제(OpenMVS 경로) 수정 — 그 전 결과는 다시 돌릴 것.
+  면 150만↑이면 `site_model_light.glb`(60만 면, 사진에서 다시 구운 텍스처)를 함께 만들고 웹·유니티 보기에 사용.
 - PC 에서 확인할 것: COLMAP 4.2.1 `--TwoViewGeometry.use_degensac 1`·`matches_importer` 실제 동작, pg 모드 처리 시간.
 
 ## 지켜야 할 것
