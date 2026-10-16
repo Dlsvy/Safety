@@ -313,6 +313,9 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
               "--output_path", str(mesh), "--PoissonMeshing.depth", "10" if quality == "draft" else "11",
               "--PoissonMeshing.trim", "7"], mvs, log, logf)  # color 는 3.9=숫자, 4.x=on/off 라 지정 안 함
         mesh = prune_mesh(mesh, dense / "fused.ply", mvs / "scene_mesh_pruned.ply", log=log)
+        if not subject:  # 바닥·벽 평평하게, 모서리 곧게(측정 오차 범위 안에서만)
+            from .planes import planarize_mesh
+            mesh = planarize_mesh(mesh, dense / "fused.ply", dense / "sparse", mvs / "scene_mesh_planar.ply", log=log)
     else:
         _run([_bin("ReconstructMesh"), str(dense_scene),
               "-o", str(mvs / "scene_mesh.mvs")] + common, mvs, log, logf)

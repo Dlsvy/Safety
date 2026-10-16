@@ -412,6 +412,15 @@ def finish_splat(h: dict, out: Path, log=print, max_wait: float | None = None) -
         shutil.copy2(raw, dst)
     else:
         n = clean["after"]
+    ground = None
+    if not h.get("subject") and dense_ply.exists() and os.environ.get("PHOTO3D_GROUND", "1") != "0":
+        try:  # 비스듬히 찍혀 지저분한 바닥 → 사진으로 만든 바닥 정사영상(Pix4D·Metashape 방식)으로 교체
+            from .planes import improve_ground_splat
+            ground = improve_ground_splat(dst, dense_ply.parent, out, log=log)
+            if ground:
+                n = n - ground["removed"] + ground["added"]
+        except Exception as e:
+            log(f"  바닥 정사영상 생략: {e}")
     log(f"  스플랫 {n:,}개 → {dst.name} ({dst.stat().st_size / 1e6:.0f} MB)")
     light = {}
     try:  # 가벼운 형식: .spz(보관·공유, 약 1/10~1/16) · .splat(웹 뷰어)
@@ -422,7 +431,7 @@ def finish_splat(h: dict, out: Path, log=print, max_wait: float | None = None) -
         log(f"  가벼운 스플랫: .spz {light['site_splat.spz']} MB · .splat {light['site_splat.splat']} MB")
     except Exception as e:
         log(f"  가벼운 스플랫 내보내기 생략: {e}")
-    return {"file": dst.name, "splats": n, "clean": clean, "light_mb": light, "steps": int(plys[-1].stem.split("_")[-1]), "up_axis": "Z",
+    return {"file": dst.name, "splats": n, "clean": clean, "light_mb": light, "ground": ground, "steps": int(plys[-1].stem.split("_")[-1]), "up_axis": "Z",
             "note": "보기용. 메쉬 GLB(Y-up)와 맞추려면 X축 -90° 회전"}
 
 
