@@ -474,7 +474,7 @@ async function loadPreview(id, L) {
     L.el.querySelector(".cap").textContent = d.kind === "dense"
       ? `조밀 점 ${n.toLocaleString()}개 · 다음: 메쉬·색`
       : d.kind === "depth"
-      ? `깊이 계산 중 ${d.done}/${d.total}장 · 장마다 점이 늘어납니다`
+      ? (d.geo ? `깊이 2차(사진 간 일치) ${d.geo}/${d.total}장 · 1차 완료` : `깊이 1차 ${d.done}/${d.total}장 · 다음: 2차(사진 간 일치)`)
       : `특징점 ${n.toLocaleString()}개 · 노란 점 = 사진 찍은 위치(${d.cams.length})`;
   } catch (e) { console.error(e); } finally { L.loading = false; }
 }

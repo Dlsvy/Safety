@@ -197,6 +197,8 @@ def _depth_points(dd: Path, per_map: int = 4000):
             hit = (mt, Xw, col)
             _DEPTH_CACHE[f] = hit
         P.append(hit[1]); C.append(hit[2]); cams.append(im.projection_center())
+    n_geo = sum(1 for f in files.values() if ".geometric." in f.name)
+    _DEPTH_CACHE["geo"] = n_geo
     if not P:
         return np.zeros((0, 3)), np.zeros((0, 3)), [], 0, 0
     return np.concatenate(P), np.concatenate(C), np.array(cams).round(3).tolist(), len(P), len(by_name)
@@ -218,7 +220,7 @@ def _preview_points(d: Path, limit: int = 30000) -> dict:
     cams, kind, extra = [], "sparse", {}
     if src.is_dir():
         xyz, rgb, cams, done, total = _depth_points(src)
-        kind, extra = "depth", {"done": done, "total": total}
+        kind, extra = "depth", {"done": done, "total": total, "geo": _DEPTH_CACHE.get("geo", 0)}
     elif src.suffix == ".ply":
         import trimesh
         pc = trimesh.load(src, process=False)
@@ -241,6 +243,16 @@ def _preview_points(d: Path, limit: int = 30000) -> dict:
         xyz, rgb = xyz[ok], rgb[ok]
     return {"n": len(xyz), "kind": kind, **extra,
             "xyz": xyz.round(3).ravel().tolist(), "rgb": rgb.astype(int).ravel().tolist(), "cams": cams}
+
+
+CMD_LABELS = [
+    ("patch_match_stereo", "GPU 깊이 계산 중 — 사진마다 1차(밝기)·2차(사진 간 일치) 두 번 계산"),
+    ("stereo_fusion", "깊이 지도 합치기(조밀 점군 만들기)"),
+    ("feature_extractor", "GPU 특징점 찾기"), ("exhaustive_matcher", "GPU 사진끼리 짝 맞추기"),
+    ("sequential_matcher", "GPU 사진끼리 짝 맞추기"), ("global_mapper", "카메라 위치 계산(글로벌)"),
+    ("mapper", "카메라 위치 계산(증분) — 글로벌 결과와 비교"), ("poisson_mesher", "메쉬 만들기"),
+    ("ReconstructMesh", "메쉬 만들기"), ("TextureMesh", "사진 색 입히기"), ("DensifyPointCloud", "CPU 깊이 계산"),
+]
 
 
 def splat_progress(d: Path) -> tuple[int, int] | None:
@@ -309,6 +321,11 @@ def job_view(job: dict) -> dict:
         v["side"] = side_tasks(d, lines)
         human = [ln for ln in lines if "$ " not in ln and ln.strip()]  # 실행 명령(경로 덩어리)은 숨김
         v["last_log"] = re.sub(r"^\[\s*[\d.]+s\]\s*", "", human[-1]).strip()[-160:] if human else ""
+        last = lines[-1] if lines else ""
+        for key, label in CMD_LABELS:  # 마지막 줄이 실행 중인 외부 프로그램이면 무엇을 하는지 표시
+            if "$ " in last and key in last:
+                v["last_log"] = label
+                break
         src = _preview_source(d)
         v["preview_rev"] = _preview_rev(src) if src else None
     rep = d / "out" / "report.json"
