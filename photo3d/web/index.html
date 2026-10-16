@@ -110,6 +110,18 @@ details input{margin-top:6px;width:100%}
 .pv .cap{text-shadow:0 1px 3px #000,0 0 6px #000}
 .pv .cap{position:absolute;left:8px;bottom:6px;font-size:11.5px;color:#cfd3d8}
 @media (max-width:560px){.prog{grid-template-columns:1fr}}
+#livepane{display:none}
+@media (min-width:1500px){
+  body.haslive .wrap{margin:0 0 0 max(16px,calc(50vw - 980px));}
+  body.haslive #livepane{display:flex;flex-direction:column;position:fixed;top:20px;bottom:20px;
+    left:calc(max(16px,calc(50vw - 980px)) + 1000px);right:max(16px,calc(50vw - 980px));min-width:420px;
+    background:var(--panel,#1c1f24);border:1px solid var(--line);border-radius:12px;padding:12px;gap:8px}
+  body.haslive .prog{grid-template-columns:1fr}
+  #livepane .lhead{font-size:14px;display:flex;justify-content:space-between;gap:8px}
+  #livepane .lhead b{font-size:15px}
+  #livepane .pv{flex:1;height:auto;min-height:300px}
+  #livepane .pv .cap{font-size:13px}
+}
 @media (max-width:560px){.job{grid-template-columns:64px 1fr}.job img,.job .ph{width:64px;height:48px}.acts{grid-column:1/-1;justify-content:flex-start}}
 /* 뷰어 */
 #viewer{position:fixed;inset:0;background:#101214;display:none;z-index:10}
@@ -151,6 +163,7 @@ details input{margin-top:6px;width:100%}
 </style>
 </head>
 <body>
+<aside id="livepane" aria-label="실시간 3D 미리보기"><div class="lhead"><b id="lvname"></b><span id="lvpct"></span></div></aside>
 <div class="wrap">
   <header>
     <h1>현장 <b>3D</b></h1>
@@ -437,7 +450,7 @@ function progress(j) {
     el.innerHTML = `<div><div class="ptot"><div class="pbar"><i></i></div><span class="ppct"></span></div><ol class="steps"></ol><div class="pel"></div><div class="plog"></div></div>
       <div class="pv"><canvas></canvas><div class="cap">카메라 위치를 계산하면 3D 점이 여기에 나타납니다</div>
       <div class="pvhelp">드래그 회전 · 휠 확대 · 오른쪽 드래그 이동 · 더블클릭 처음 시점</div></div>`;
-    L = {el, pv: null, rev: null, started: j.started}; live.set(j.id, L);
+    L = {el, pv: null, rev: null, started: j.started, pvEl: el.querySelector(".pv")}; live.set(j.id, L);
   }
   L.started = j.started;
   const step = j.status === "queued" ? 0 : Math.max(1, j.step || 1);
@@ -468,7 +481,7 @@ async function loadPreview(id, L) {
     if (!THREE) { THREE = await import("three"); }
     if (!OrbitControls) ({ OrbitControls } = await import("three/addons/controls/OrbitControls.js"));
     if (!L.pv) {
-      const cv = L.el.querySelector("canvas");
+      const cv = L.pvEl.querySelector("canvas");
       const r = new THREE.WebGLRenderer({canvas: cv, antialias: true}); r.setPixelRatio(Math.min(devicePixelRatio, 2));
       const sc = new THREE.Scene(), cam = new THREE.PerspectiveCamera(45, 1, 0.01, 1e5), root = new THREE.Group();
       // 마우스/손가락: 왼쪽 드래그 회전 · 휠/두 손가락 확대·축소 · 오른쪽 드래그 이동 · 더블클릭 처음 시점
@@ -513,7 +526,7 @@ async function loadPreview(id, L) {
     if (!L.pv.user && (L.pv.kind !== d.kind || !L.pv.rad || rad > L.pv.rad * 1.15)) { L.pv.rad = rad; L.pv.home(); }
     else if (!L.pv.rad) L.pv.rad = rad;
     L.pv.kind = d.kind; L.pv.c = c;
-    L.el.querySelector(".cap").textContent = d.kind === "dense"
+    L.pvEl.querySelector(".cap").textContent = d.kind === "dense"
       ? `조밀 점 ${n.toLocaleString()}개 · 다음: 메쉬·색`
       : d.kind === "depth"
       ? (d.geo ? `깊이 2차(사진 간 일치) ${d.geo}/${d.total}장 · 1차 완료` : `깊이 1차 ${d.done}/${d.total}장 · 다음: 2차(사진 간 일치)`)
@@ -527,12 +540,34 @@ async function refresh() {
     const list = $("list"); list.replaceChildren();
     if (!d.jobs.length) list.innerHTML = `<div class="empty">아직 만든 3D 가 없습니다. 위에서 사진이나 영상을 올려 보세요.</div>`;
     d.jobs.forEach((j) => list.append(card(j)));
+    placeLive(d.jobs);
     for (const id of [...live.keys()]) if (!d.jobs.some((j) => j.id === id && (j.status === "running" || j.status === "queued"))) live.delete(id);
     const lan = d.lan.length ? `같은 와이파이의 폰에서 접속: <span class="lan">${d.lan.join("  ")}</span>` : "";
     const gpu = d.tools.colmap ? "GPU(COLMAP) 사용" : "CPU 로 처리(느림)";
     $("tip").innerHTML = `${lan}${lan ? " · " : ""}${gpu} · 버전 ${d.version || "?"}`;
   } catch (e) { $("list").innerHTML = `<div class="empty">앱 서버에 연결할 수 없습니다 — APP.bat 창이 켜져 있는지 확인하세요.</div>`; }
 }
+/* ── 넓은 화면: 처리 중인 작업의 3D 미리보기를 오른쪽 큰 패널로 ── */
+const wideMQ = window.matchMedia("(min-width:1500px)");
+function placeLive(jobs) {
+  const pane = $("livepane");
+  const run = jobs.find((j) => j.status === "running" && live.has(j.id)) || null;
+  // 끝난 작업의 미리보기는 패널에서 치움
+  for (const pv of [...pane.querySelectorAll(".pv")]) if (!run || pv.dataset.job !== run.id) pv.remove();
+  document.body.classList.toggle("haslive", !!run && wideMQ.matches);
+  for (const [id, L] of live) {
+    const pv = L.pvEl;
+    if (!pv) continue;
+    pv.dataset.job = id;
+    const want = run && id === run.id && wideMQ.matches ? pane : L.el;
+    if (pv.parentElement !== want) want.append(pv);
+  }
+  if (run) {
+    $("lvname").textContent = `실시간 3D — ${run.name}`;
+    $("lvpct").textContent = run.pct != null ? `${run.pct}%` + (run.eta_min ? ` · 약 ${run.eta_min}분 남음` : "") : "";
+  }
+}
+wideMQ.addEventListener("change", () => refresh());
 refresh(); setInterval(refresh, 3000);
 
 /* ── CPU·GPU 사용량(2초마다) ── */
