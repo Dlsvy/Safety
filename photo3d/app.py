@@ -299,37 +299,111 @@ def side_tasks(d: Path, lines: list[str]) -> list[str]:
     return out
 
 
+HIST = DATA / "timing_history.json"
+# 기록이 없을 때 쓰는 단계별 '사진 1장당 초'(RTX 5060 Ti 8GB 기준 어림값). 처리가 끝날 때마다 이 PC 의 실제 기록으로 바뀐다
+DEFAULT_SPI = {"fast": {"1": 0.5, "2": 1.5, "3": 0.2, "4": 10.0, "5": 3.0},
+               "best": {"1": 0.8, "2": 3.0, "3": 0.3, "4": 35.0, "5": 25.0}}
+
+
+def _hist() -> list:
+    try:
+        return json.loads(HIST.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def record_timing(d: Path, job: dict) -> None:
+    """끝난 작업의 단계별 시간을 기록 — 다음 작업의 시간 예측에 쓴다(최근 40건)."""
+    try:
+        r = json.loads((d / "out" / "report.json").read_text(encoding="utf-8"))
+        n = int((r.get("input") or {}).get("images") or r["sfm"]["images_input"])
+        st = {}
+        for name, sec in (r.get("timing_s") or {}).items():
+            m = re.match(r"(\d)/5", name)
+            if m:
+                st[m.group(1)] = float(sec)
+        if n and st:
+            h = _hist()[-39:] + [{"mode": job.get("mode", "fast"), "n": n, "s": st, "t": time.time()}]
+            HIST.write_text(json.dumps(h, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _spi(mode: str) -> dict:
+    """단계별 '사진 1장당 초': 같은 모드의 최근 기록 중앙값(없으면 기본값)"""
+    base = dict(DEFAULT_SPI.get(mode, DEFAULT_SPI["fast"]))
+    rows = [h for h in _hist() if h.get("mode") == mode][-10:]
+    for k in base:
+        vals = [h["s"][k] / h["n"] for h in rows if k in h.get("s", {}) and h.get("n")]
+        if vals:
+            base[k] = sorted(vals)[len(vals) // 2]
+    return base
+
+
+def _n_images(d: Path, lines: list[str], job: dict) -> int:
+    for ln in reversed(lines):
+        m = re.search(r"특징점 추출 \((\d+)장", ln) or re.search(r"사진 \d+장 중 (\d+)장 사용", ln) or \
+            re.search(r"등록 \d+/(\d+)장", ln)
+        if m:
+            return int(m.group(1))
+    src = Path(job["local_path"]) if job.get("local_path") else d / "input"
+    try:
+        n = 0
+        for q in src.iterdir():
+            ext = q.suffix.lower()
+            n += 1 if ext in {".jpg", ".jpeg", ".png", ".heic", ".tif", ".tiff", ".webp", ".insp"} else \
+                (60 if ext in {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".insv"} else 0)
+        return max(n, 1)
+    except Exception:
+        return 30
+
+
 def overall_progress(d: Path, lines: list[str], step: int, job: dict) -> tuple[int, int | None]:
-    """전체 진행률(%)과 남은 시간(분). 단계별 비중 + 단계 안의 실제 진행(깊이 지도 장수·스플랫 스텝)."""
-    lo, hi = {0: (0, 2), 1: (2, 6), 2: (6, 22), 3: (22, 25), 4: (25, 82), 5: (82, 88), 6: (88, 92), 7: (92, 100)}.get(step, (0, 2))
+    """전체 진행률(%)과 남은 시간(분).
+    예전: (지금까지 걸린 시간 ÷ 진행률) — 단계마다 걸리는 시간이 크게 달라(3D 생성이 대부분) 앞쪽에서 너무 짧게 잡혔다.
+    지금: 단계별 예상 시간 = 사진 수 × 이 PC 의 과거 기록(사진 1장당 초, 같은 모드 중앙값) × 이번 작업의 속도 보정.
+    진행 중인 단계는 실제 진행(깊이 지도 장수 등)이 있으면 그 속도로, 없으면 예상 시간에서 뺀다."""
+    mode = job.get("mode", "fast")
+    n = _n_images(d, lines, job)
+    spi = _spi(mode)
+    exp = {k: spi[k] * n for k in spi}
+    starts = {}  # 단계 시작 시각(처리 시작 후 초)
+    for ln in lines:
+        m = re.match(r"\[\s*([\d.]+)s\]\s+(\d)/5\s", ln)
+        if m:
+            starts[m.group(2)] = float(m.group(1))
+    el = time.time() - (job.get("started") or time.time())
+    cur = str(min(max(step, 1), 5))
+    # 이번 작업이 기록보다 빠른지 느린지(끝난 단계의 실제/예상 비율) → 남은 단계에 반영
+    ks = sorted(starts)
+    ratios = []
+    for a, b in zip(ks, ks[1:]):
+        if exp.get(a, 0) > 1:
+            ratios.append((starts[b] - starts[a]) / exp[a])
+    speed = min(3.0, max(0.33, sorted(ratios)[len(ratios) // 2])) if ratios else 1.0
+    e_cur = el - starts.get(cur, el)
     frac = 0.0
-    if step == 4:
+    if cur == "4":
         dd = d / "out" / "work" / "dense" / "stereo" / "depth_maps"
         try:
-            import pycolmap  # noqa: F401
-            total = len(list((d / "out" / "work" / "dense" / "images").iterdir()))
+            total = len(list((d / "out" / "work" / "dense" / "images").rglob("*.jpg")))
+            if total and dd.exists():
+                frac = 0.5 * (len(list(dd.glob("*.photometric.bin"))) + len(list(dd.glob("*.geometric.bin")))) / (2 * total)
         except Exception:
-            total = 0
-        if total and dd.exists():
-            n_ph = len(list(dd.glob("*.photometric.bin")))
-            n_ge = len(list(dd.glob("*.geometric.bin")))
-            frac = 0.6 * (n_ph + n_ge) / (2 * total)  # 깊이 계산이 4단계의 약 60%
-        k4 = max((i for i, ln in enumerate(lines) if re.search(r"\]\s+4/5\s", ln)), default=-1)
-        after = "\n".join(lines[k4 + 1:])  # 4단계 제목 줄은 빼고(제목에 '메쉬·텍스처'가 들어 있음)
-        if "점군 정리" in after or "깊이 prior" in after or "조밀 점군" in after:
-            frac = max(frac, 0.6)
-        if "메쉬 가시 정리" in after or "ReconstructMesh" in after or "poisson" in after.lower():
-            frac = max(frac, 0.7)
-        if "사진 텍스처" in after or "이음새" in after:
-            frac = max(frac, 0.85)
-    elif step == 7:
+            pass
+    elif cur == "5" and step == 7:
         pr = splat_progress(d)
         if pr and pr[1]:
             frac = pr[0] / pr[1]
-    pct = int(lo + (hi - lo) * min(frac, 1.0))
-    el = time.time() - (job.get("started") or time.time())
-    eta = int(el / pct * (100 - pct) / 60) + 1 if pct >= 8 else None
-    return pct, eta
+    e_stage = exp.get(cur, 1) * speed
+    if frac > 0.05:
+        rem_cur = max(e_cur * (1 - frac) / frac, 0.0)
+        rem_cur = 0.5 * rem_cur + 0.5 * max(e_stage - e_cur, 0.1 * e_stage)  # 실측 속도와 기록을 반반
+    else:
+        rem_cur = max(e_stage - e_cur, 0.15 * e_stage)  # 기록보다 오래 걸리면 '조금 남음'으로 버팀
+    rem = rem_cur + sum(exp[k] * speed for k in exp if k > cur)
+    pct = int(min(99, 100 * el / max(el + rem, 1)))
+    return pct, max(1, int(round(rem / 60)))
 
 
 def job_view(job: dict) -> dict:
@@ -365,6 +439,12 @@ def job_view(job: dict) -> dict:
                 break
         src = _preview_source(d)
         v["preview_rev"] = _preview_rev(src) if src else None
+    if job["status"] == "queued":  # 시작 전 예상 총 시간(이 PC 의 과거 기록 기준)
+        try:
+            n = _n_images(d, [], job)
+            v["eta_min"] = max(1, int(round(sum(_spi(job.get("mode", "fast")).values()) * n / 60)))
+        except Exception:
+            pass
     rep = d / "out" / "report.json"
     if rep.exists():
         try:
@@ -453,6 +533,8 @@ def run_job(jid: str) -> None:
     job = load_job(jid)
     ok = rc == 0 and (d / "out" / "site_model.glb").exists()
     job.update(status="done" if ok else "failed", finished=time.time())
+    if ok and not resume:  # 이어서 처리한 작업은 단계 시간이 섞여 기록하지 않음
+        record_timing(d, job)
     if jid in _STOPPED:
         _STOPPED.discard(jid)
         job.update(status="failed", error="멈춤 — '이어서 처리'를 누르면 끝난 단계는 건너뛰고 이어서 합니다")
@@ -989,6 +1071,14 @@ def main():
                 save_job(job)
         except Exception:
             pass
+    if not HIST.exists():  # 처음: 이미 끝난 작업들의 단계 시간으로 예측 기록을 채운다
+        for jd in sorted(JOBS.iterdir()):
+            try:
+                jb = json.loads((jd / "job.json").read_text(encoding="utf-8"))
+                if jb.get("status") == "done":
+                    record_timing(jd, jb)
+            except Exception:
+                pass
     threading.Thread(target=worker, daemon=True).start()
     threading.Thread(target=prepare_prior, daemon=True).start()
     srv = ThreadingHTTPServer(("0.0.0.0", port), Handler)
