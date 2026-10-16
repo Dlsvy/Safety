@@ -15,6 +15,15 @@ from pathlib import Path
 import numpy as np
 
 
+def _jsonable(o):
+    """체크포인트 저장용: numpy 값을 JSON 으로"""
+    if isinstance(o, np.ndarray):
+        return o.tolist()
+    if isinstance(o, np.generic):
+        return o.item()
+    return str(o)
+
+
 def run(a) -> dict:
     from . import export, frames, mvs, scale, sfm
 
@@ -70,7 +79,23 @@ def run(a) -> dict:
         log(f"  VRAM {plan['vram_gb']}GB 맞춤: 조밀복원 최대 {plan['pm_max']}px · 스플랫 최대 {plan['splats']:,}개 · "
             f"학습 해상도 {a.splat_res}px · 깊이 모델 {plan['moge']}" + (" (다른 프로그램이 VRAM 사용 중 → 낮춤)" if plan.get("busy") else ""))
     rep["gpu"] = {"info": g, "plan": plan}
-    if a.from_colmap:
+    ck = work / "ckpt.json"  # 이어서 처리: 3단계(축척·좌표)까지 끝났으면 그 결과부터 다시 시작
+    resumed = False
+    if getattr(a, "resume", False) and ck.exists() and (work / "sfm" / "georef" / "images.bin").exists():
+        try:
+            import pycolmap
+            c = json.loads(ck.read_text(encoding="utf-8"))
+            rec = pycolmap.Reconstruction(work / "sfm" / "georef")
+            img_dir = Path(c["img_dir"])
+            st, geo = c["sfm"], c["georef"]
+            rep["input"] = c.get("input")
+            resumed = True
+            log(f"이어서 처리: 1~3단계 결과 재사용(사진 {rec.num_reg_images()}장 연결)")
+        except Exception as e:
+            log(f"이어서 처리 불가 → 처음부터: {e}")
+    if resumed:
+        pass
+    elif a.from_colmap:
         # 외부 모델(MapAnything·VGGT 등 적은 장수용)이 계산한 카메라를 이어받는다: <dir>/images, <dir>/sparse
         src = Path(a.from_colmap)
         log(f"1-2/5 외부 카메라 결과 사용: {src}")
@@ -113,15 +138,19 @@ def run(a) -> dict:
                               max_features=a.max_features, log=log)
     rep["sfm"] = st
 
-    log("3/5 축척·좌표 정합")
-    geo = scale.georeference(rec, img_dir, a.marker_size, a.marker_dict,
-                             Path(a.gcp) if a.gcp else None,
-                             Path(a.check) if a.check else None,
-                             scale_csv=Path(a.scale_dist) if a.scale_dist else None,
-                             gcp_ba=not a.no_gcp_ba, log=log)
+    if not resumed:
+        log("3/5 축척·좌표 정합")
+        geo = scale.georeference(rec, img_dir, a.marker_size, a.marker_dict,
+                                 Path(a.gcp) if a.gcp else None,
+                                 Path(a.check) if a.check else None,
+                                 scale_csv=Path(a.scale_dist) if a.scale_dist else None,
+                                 gcp_ba=not a.no_gcp_ba, log=log)
+        (work / "sfm" / "georef").mkdir(parents=True, exist_ok=True)
+        rec.write(work / "sfm" / "georef")
+        ck.write_text(json.dumps({"stage": 3, "img_dir": str(img_dir), "sfm": st, "georef": geo,
+                                  "input": rep.get("input")}, ensure_ascii=False, default=_jsonable),
+                      encoding="utf-8")
     rep["georef"] = geo
-    (work / "sfm" / "georef").mkdir(parents=True, exist_ok=True)
-    rec.write(work / "sfm" / "georef")
     cams = np.array([rec.image(i).projection_center() for i in rec.reg_image_ids()])
 
     log(f"4/5 조밀복원·메쉬·텍스처 (품질 {a.quality})")
@@ -163,7 +192,7 @@ def run(a) -> dict:
 
     res = mvs.densify_and_mesh(rec, img_dir, work, quality=a.quality, engine=a.dense,
                                colmap_bin=a.colmap_bin, on_dense_ready=on_dense_ready, prior=a.prior,
-                               subject=a.subject, log=log)
+                               subject=a.subject, resume=resumed, log=log)
     if a.fill and "fill" not in side and res.get("dense_ply"):  # CPU(OpenMVS) 경로: 콜백 없음 → 지금 시작
         on_dense_ready(work / "dense", res["dense_ply"])
 
@@ -309,6 +338,8 @@ def main(argv=None):
                    help="가우시안 스플래팅 학습 스텝(0=끔). 기본: fast 7000 / gpu-max 30000 / 그 외 끔")
     r.add_argument("--no-prior", dest="prior", action="store_false",
                    help="깊이 prior(MoGe-2)로 무늬 없는 벽·바닥 채우기 끄기 (기본: GPU 경로에서 켬)")
+    r.add_argument("--resume", action="store_true",
+                   help="멈춘 작업 이어서: 1~3단계 결과·이미 계산한 깊이 지도·조밀 점군을 재사용")
     r.add_argument("--subject", action="store_true",
                    help="사람·물체 모드: 사진마다 배경을 자동으로 빼고(BiRefNet) 대상만 스플랫 학습·자르기")
     r.add_argument("--splat-engine", choices=["auto", "spirula", "brush"],

@@ -299,6 +299,39 @@ def side_tasks(d: Path, lines: list[str]) -> list[str]:
     return out
 
 
+def overall_progress(d: Path, lines: list[str], step: int, job: dict) -> tuple[int, int | None]:
+    """전체 진행률(%)과 남은 시간(분). 단계별 비중 + 단계 안의 실제 진행(깊이 지도 장수·스플랫 스텝)."""
+    lo, hi = {0: (0, 2), 1: (2, 6), 2: (6, 22), 3: (22, 25), 4: (25, 82), 5: (82, 88), 6: (88, 92), 7: (92, 100)}.get(step, (0, 2))
+    frac = 0.0
+    if step == 4:
+        dd = d / "out" / "work" / "dense" / "stereo" / "depth_maps"
+        try:
+            import pycolmap  # noqa: F401
+            total = len(list((d / "out" / "work" / "dense" / "images").iterdir()))
+        except Exception:
+            total = 0
+        if total and dd.exists():
+            n_ph = len(list(dd.glob("*.photometric.bin")))
+            n_ge = len(list(dd.glob("*.geometric.bin")))
+            frac = 0.6 * (n_ph + n_ge) / (2 * total)  # 깊이 계산이 4단계의 약 60%
+        k4 = max((i for i, ln in enumerate(lines) if re.search(r"\]\s+4/5\s", ln)), default=-1)
+        after = "\n".join(lines[k4 + 1:])  # 4단계 제목 줄은 빼고(제목에 '메쉬·텍스처'가 들어 있음)
+        if "점군 정리" in after or "깊이 prior" in after or "조밀 점군" in after:
+            frac = max(frac, 0.6)
+        if "메쉬 가시 정리" in after or "ReconstructMesh" in after or "poisson" in after.lower():
+            frac = max(frac, 0.7)
+        if "사진 텍스처" in after or "이음새" in after:
+            frac = max(frac, 0.85)
+    elif step == 7:
+        pr = splat_progress(d)
+        if pr and pr[1]:
+            frac = pr[0] / pr[1]
+    pct = int(lo + (hi - lo) * min(frac, 1.0))
+    el = time.time() - (job.get("started") or time.time())
+    eta = int(el / pct * (100 - pct) / 60) + 1 if pct >= 8 else None
+    return pct, eta
+
+
 def job_view(job: dict) -> dict:
     d = job_dir(job["id"])
     v = dict(job)
@@ -319,6 +352,7 @@ def job_view(job: dict) -> dict:
             v["stage"] = stage
         v["step"] = step
         v["side"] = side_tasks(d, lines)
+        v["pct"], v["eta_min"] = overall_progress(d, lines, step, job)
         human = [ln for ln in lines if "$ " not in ln and ln.strip()]  # 실행 명령(경로 덩어리)은 숨김
         v["last_log"] = re.sub(r"^\[\s*[\d.]+s\]\s*", "", human[-1]).strip()[-160:] if human else ""
         last = lines[-1] if lines else ""
@@ -365,7 +399,11 @@ def worker() -> None:
 def run_job(jid: str) -> None:
     d = job_dir(jid)
     job = load_job(jid)
-    shutil.rmtree(d / "out", ignore_errors=True)  # 다시 처리: 이전 결과·미리보기를 지우고 새로
+    if job.get("status") != "queued":  # 대기 중에 멈춤(취소)된 작업
+        return
+    resume = bool(job.pop("resume", False))
+    if not resume:
+        shutil.rmtree(d / "out", ignore_errors=True)  # 다시 처리: 이전 결과·미리보기를 지우고 새로
     job.update(status="running", started=time.time())
     save_job(job)
     tools = find_tools()
@@ -387,17 +425,49 @@ def run_job(jid: str) -> None:
         cmd += ["--scale-dist", str(sc)]
     if job.get("subject"):
         cmd += ["--subject"]
+    if resume:  # 이어서 처리: 끝난 단계·계산한 깊이 지도·점군 재사용
+        cmd += ["--resume"]
     if job.get("marker_size"):
         cmd += ["--marker-size", str(job["marker_size"])]
-    with open(d / "console.log", "w", encoding="utf-8") as f:
-        r = subprocess.run(cmd, cwd=ROOT, env=env, stdout=f, stderr=subprocess.STDOUT)
+    with open(d / "console.log", "a" if resume else "w", encoding="utf-8") as f:
+        # 별도 프로세스 그룹으로 실행 → '멈춤' 때 COLMAP·Spirula 등 하위 프로그램까지 한 번에 끝낼 수 있게
+        kw = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+        proc = subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=f, stderr=subprocess.STDOUT, **kw)
+        _RUNNING[jid] = proc
+        rc = proc.wait()
+        _RUNNING.pop(jid, None)
     job = load_job(jid)
-    ok = r.returncode == 0 and (d / "out" / "site_model.glb").exists()
+    ok = rc == 0 and (d / "out" / "site_model.glb").exists()
     job.update(status="done" if ok else "failed", finished=time.time())
-    if not ok:
+    if jid in _STOPPED:
+        _STOPPED.discard(jid)
+        job.update(status="failed", error="멈춤 — '이어서 처리'를 누르면 끝난 단계는 건너뛰고 이어서 합니다")
+    elif not ok:
         lines = (d / "console.log").read_text(encoding="utf-8", errors="replace").splitlines()
         job["error"] = explain_error(lines)
     save_job(job)
+
+
+_RUNNING: dict = {}   # 작업 id → 실행 중인 처리 프로세스
+_STOPPED: set = set()
+
+
+def stop_job(jid: str) -> bool:
+    """처리 멈추기: 처리 프로세스와 그 하위 프로그램(COLMAP·Spirula·Brush·구멍 메우기)을 모두 끝낸다."""
+    proc = _RUNNING.get(jid)
+    if not proc or proc.poll() is not None:
+        return False
+    _STOPPED.add(jid)
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        else:
+            import signal
+            os.killpg(proc.pid, signal.SIGTERM)
+    except Exception:
+        proc.kill()
+    return True
 
 
 _HINTS = [
@@ -726,6 +796,25 @@ class Handler(BaseHTTPRequestHandler):
                        "mode": "best" if b.get("mode") == "best" else "fast", "subject": bool(b.get("subject"))}
                 save_job(job)
                 return self._json(job, 201)
+            m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/stop", p)
+            if m:  # 처리 멈추기(대기 중이면 대기열에서 빼기)
+                job = load_job(m.group(1))
+                if job["status"] == "queued":
+                    job.update(status="failed", error="멈춤(대기 중 취소) — '이어서 처리'로 다시 시작")
+                    save_job(job)
+                    return self._json(job)
+                if not stop_job(job["id"]):
+                    return self._json({"error": "처리 중인 작업이 아닙니다"}, 409)
+                return self._json({"ok": True})
+            m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/resume", p)
+            if m:  # 멈춘 곳부터 이어서
+                job = load_job(m.group(1))
+                if job["status"] != "failed":
+                    return self._json({"error": "멈춘 작업만 이어서 처리할 수 있습니다"}, 409)
+                job.update(status="queued", error=None, resume=True)
+                save_job(job)
+                _queue.put(job["id"])
+                return self._json(job)
             m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/start", p)
             if m:
                 job = load_job(m.group(1))

@@ -195,7 +195,7 @@ def add_prior_points(fused: Path, dense: Path, log=print) -> int:
 def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
                      quality: str = "medium", threads: int = 0, engine: str = "openmvs",
                      colmap_bin: str | None = None, on_dense_ready=None, prior: bool = True,
-                     subject: bool = False, log=print) -> dict:
+                     subject: bool = False, resume: bool = False, log=print) -> dict:
     q = QUALITY[quality]
     sparse = work / "sparse_georef"
     if sparse.exists():
@@ -204,13 +204,17 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
     rec.write_text(sparse)  # OpenMVS InterfaceCOLMAP 은 텍스트 모델을 확실히 읽는다
 
     dense = work / "dense"
-    if dense.exists():
-        shutil.rmtree(dense)
-    log("  왜곡보정 이미지 생성")
-    pycolmap.undistort_images(dense, sparse, image_dir)
-    # undistort 결과 sparse 를 텍스트로도 기록
-    und = pycolmap.Reconstruction(dense / "sparse")
-    und.write_text(dense / "sparse")
+    if resume and (dense / "undistort.done").exists():
+        log("  이어서 처리: 왜곡보정 이미지 재사용")
+    else:
+        if dense.exists():
+            shutil.rmtree(dense)
+        log("  왜곡보정 이미지 생성")
+        pycolmap.undistort_images(dense, sparse, image_dir)
+        # undistort 결과 sparse 를 텍스트로도 기록
+        und = pycolmap.Reconstruction(dense / "sparse")
+        und.write_text(dense / "sparse")
+        (dense / "undistort.done").write_text("ok")
 
     mvs = work / "mvs"
     mvs.mkdir(exist_ok=True)
@@ -231,11 +235,23 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
         fast = quality == "draft"
         from .gpu import ram_gb
         cache = str(max(4, int(ram_gb() * 0.5)))  # 깊이 지도 캐시는 PC 메모리(RAM)의 절반까지
+        pm_size = dense / "pm_size.txt"
+        if resume and pm_size.exists():  # 이어서: 끊기기 전과 같은 해상도로(이미 계산한 깊이 지도는 COLMAP 이 건너뜀)
+            size = int(pm_size.read_text())
         ladder = [size] + [s_ for s_ in (int(size * 0.8), int(size * 0.6)) if s_ >= 1200]
+        if resume and (dense / "pm.done").exists():
+            ladder = []
+            log(f"  이어서 처리: 깊이 계산 완료분 재사용({size}px)")
         for k, size in enumerate(ladder):
+            keep = resume and k == 0 and pm_size.exists()
+            if keep:
+                n_done = len(list((dense / "stereo" / "depth_maps").glob("*.geometric.bin")))
+                log(f"  이어서 처리: 깊이 지도 {n_done}장은 건너뛰고 나머지 계산")
             for sub in ("depth_maps", "normal_maps", "consistency_graphs"):
-                shutil.rmtree(dense / "stereo" / sub, ignore_errors=True)
+                if not keep:
+                    shutil.rmtree(dense / "stereo" / sub, ignore_errors=True)
                 (dense / "stereo" / sub).mkdir(parents=True, exist_ok=True)
+            pm_size.write_text(str(size))
             try:
                 # 형상 일관성(geom_consistency)은 빠른 모드에서도 켠다: 끄면 하늘·그늘·비스듬한 지면의 틀린 깊이가
                 # 걸러지지 않아 카메라 쪽으로 뻗는 '가시'가 생긴다(PC castle-P19). 빠른 모드는 반복만 줄인다.
@@ -245,6 +261,7 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
                       "--PatchMatchStereo.filter_min_ncc", "0.15", "--PatchMatchStereo.cache_size", cache]
                      + (["--PatchMatchStereo.num_iterations", "4", "--PatchMatchStereo.window_step", "2"] if fast else []),
                      mvs, log, logf)
+                (dense / "pm.done").write_text(str(size))
                 break
             except RuntimeError as e:
                 if k == len(ladder) - 1:
@@ -252,26 +269,32 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
                 log(f"  조밀복원 {size}px 실패 → {ladder[k + 1]}px 로 다시 ({str(e).splitlines()[-1].strip()[:120]})")
         log(f"  조밀복원 해상도 {size}px")
         fused = dense / "fused_raw.ply"
-        mask_args = []
-        if subject:  # 사람·물체 모드: 배경 분리 마스크 안쪽만 합쳐 대상만 메쉬로(배경 덩어리·번짐 방지)
-            mdir = subject_masks(dense, log)
-            if mdir:
-                mask_args = ["--StereoFusion.mask_path", str(mdir)]
-                prior = False  # 흰 벽 채우기는 배경용이라 끔
-        _run([colmap_bin, "stereo_fusion", "--workspace_path", str(dense), "--workspace_format", "COLMAP", *mask_args,
-              "--input_type", "geometric", "--StereoFusion.max_image_size", str(size),
-              "--StereoFusion.cache_size", cache,
-              "--StereoFusion.min_num_pixels", "4", "--StereoFusion.max_reproj_error", "1.5",
-              "--StereoFusion.max_depth_error", "0.008", "--StereoFusion.max_normal_error", "8",
-              "--output_path", str(fused)], mvs, log, logf)
-        from .pointfilter import clean_ply
-        cams = np.array([rec.image(i).projection_center() for i in rec.reg_image_ids()])
-        fused = clean_ply(fused, dense / "fused.ply", cams, log=log)
-        if fused.name != "fused.ply":
-            shutil.copy2(fused, dense / "fused.ply")
+        fused_done = resume and (dense / "fused.done").exists() and (dense / "fused.ply").exists()
+        if fused_done:
             fused = dense / "fused.ply"
-        if prior:  # 무늬 없는 벽·바닥 채우기(MoGe-2 깊이 prior, 측정과 맞춘 뒤 다시점 일치만)
-            add_prior_points(fused, dense, log)
+            log("  이어서 처리: 조밀 점군 재사용")
+        else:
+            mask_args = []
+            if subject:  # 사람·물체 모드: 배경 분리 마스크 안쪽만 합쳐 대상만 메쉬로(배경 덩어리·번짐 방지)
+                mdir = subject_masks(dense, log)
+                if mdir:
+                    mask_args = ["--StereoFusion.mask_path", str(mdir)]
+                    prior = False  # 흰 벽 채우기는 배경용이라 끔
+            _run([colmap_bin, "stereo_fusion", "--workspace_path", str(dense), "--workspace_format", "COLMAP", *mask_args,
+                  "--input_type", "geometric", "--StereoFusion.max_image_size", str(size),
+                  "--StereoFusion.cache_size", cache,
+                  "--StereoFusion.min_num_pixels", "4", "--StereoFusion.max_reproj_error", "1.5",
+                  "--StereoFusion.max_depth_error", "0.008", "--StereoFusion.max_normal_error", "8",
+                  "--output_path", str(fused)], mvs, log, logf)
+            from .pointfilter import clean_ply
+            cams = np.array([rec.image(i).projection_center() for i in rec.reg_image_ids()])
+            fused = clean_ply(fused, dense / "fused.ply", cams, log=log)
+            if fused.name != "fused.ply":
+                shutil.copy2(fused, dense / "fused.ply")
+                fused = dense / "fused.ply"
+            if prior:  # 무늬 없는 벽·바닥 채우기(MoGe-2 깊이 prior, 측정과 맞춘 뒤 다시점 일치만)
+                add_prior_points(fused, dense, log)
+            (dense / "fused.done").write_text("ok")
         # (OpenMVS 장면 변환은 이 경로에서 쓰지 않음 — 시간 절약)
         shutil.copy2(fused, mvs / "scene_dense.ply")
         if on_dense_ready:  # 점군 완성 → 메운 모델(CPU 별도 프로세스)·스플랫(GPU)을 지금 동시에 시작

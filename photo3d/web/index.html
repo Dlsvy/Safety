@@ -97,6 +97,10 @@ details input{margin-top:6px;width:100%}
 .cur .ico{border-color:var(--line);border-top-color:var(--accent);border-right-color:var(--accent);animation:spin .9s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.cur .ico{animation-duration:3s}}
+.ptot{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.pbar{flex:1;height:10px;border-radius:5px;background:var(--line);overflow:hidden}
+.pbar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#d29922,#f2b705);transition:width .8s}
+.ppct{font-size:13px;font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--fg,inherit)}
 .plog{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:6px;white-space:pre-line;overflow:hidden}
 .pel{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:4px}
 .pv{position:relative;height:240px;border-radius:8px;background:#0f1113;overflow:hidden}
@@ -391,8 +395,21 @@ function card(j) {
     const a = document.createElement("a"); a.className = "btn"; a.textContent = "처리 기록";
     a.href = `/api/jobs/${j.id}/log`; a.target = "_blank"; a.rel = "noopener"; acts.append(a);
   }
+  if (j.status === "running" || j.status === "queued") {  // 처리 멈추기 → 나중에 '이어서 처리'
+    const b = document.createElement("button"); b.textContent = "멈춤";
+    b.title = "처리를 멈춥니다. 나중에 '이어서 처리'로 끝난 단계는 건너뛰고 계속할 수 있습니다";
+    b.onclick = async () => { if (b.dataset.sure) { b.disabled = true; await api(`/api/jobs/${j.id}/stop`, {method:"POST"}).catch((e) => alertMsg(e)); refresh(); }
+      else { b.dataset.sure = 1; b.textContent = "정말 멈춤"; } };
+    acts.append(b);
+  }
+  if (j.status === "failed") {  // 멈춘 곳부터 이어서(끝난 단계·계산한 깊이 지도 재사용)
+    const b = document.createElement("button"); b.textContent = "이어서 처리"; b.className = "primary";
+    b.title = "멈춘 곳부터 다시: 카메라 위치·이미 계산한 깊이 지도·점군을 재사용";
+    b.onclick = async () => { await api(`/api/jobs/${j.id}/resume`, {method:"POST"}).catch((e) => alertMsg(e)); refresh(); };
+    acts.append(b);
+  }
   if (j.status === "failed" || j.status === "done") {
-    const b = document.createElement("button"); b.textContent = "다시 처리";
+    const b = document.createElement("button"); b.textContent = "다시 처리"; b.title = "처음부터 새로";
     b.onclick = async () => { await api(`/api/jobs/${j.id}/start`, {method:"POST"}).catch((e) => alertMsg(e)); refresh(); };
     acts.append(b);
   }
@@ -417,7 +434,7 @@ function progress(j) {
   let L = live.get(j.id);
   if (!L) {
     const el = document.createElement("div"); el.className = "prog";
-    el.innerHTML = `<div><ol class="steps"></ol><div class="pel"></div><div class="plog"></div></div>
+    el.innerHTML = `<div><div class="ptot"><div class="pbar"><i></i></div><span class="ppct"></span></div><ol class="steps"></ol><div class="pel"></div><div class="plog"></div></div>
       <div class="pv"><canvas></canvas><div class="cap">카메라 위치를 계산하면 3D 점이 여기에 나타납니다</div>
       <div class="pvhelp">드래그 회전 · 휠 확대 · 오른쪽 드래그 이동 · 더블클릭 처음 시점</div></div>`;
     L = {el, pv: null, rev: null, started: j.started}; live.set(j.id, L);
@@ -429,6 +446,10 @@ function progress(j) {
     const k = i + 1, cls = step > k ? "done" : step === k ? "cur" : "";
     return `<li class="${cls}"><span class="ico" aria-hidden="true">${step > k ? "✓" : ""}</span>${t}</li>`;
   }).join("");
+  const pct = j.status === "queued" ? 0 : (j.pct || 0);
+  L.el.querySelector(".pbar i").style.width = pct + "%";
+  L.el.querySelector(".ppct").textContent = j.status === "queued" ? "대기 중"
+    : `${pct}%` + (j.eta_min ? ` · 남은 시간 약 ${j.eta_min}분` : "");
   L.el.querySelector(".plog").textContent = j.status === "queued" ? "앞 작업이 끝나면 시작합니다"
     : [j.last_log || "", ...(j.side || []).map((t) => "· 동시에: " + t)].join("\n");
   if (j.preview_rev && j.preview_rev !== L.rev && !L.loading) { L.rev = j.preview_rev; loadPreview(j.id, L); }
