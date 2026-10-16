@@ -11,6 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
 import pycolmap
 
 QUALITY = {
@@ -87,6 +88,31 @@ def _color_from_points(mesh_path: Path, points_path: Path, mvs: Path, log, smoot
         return mesh_path
 
 
+def prune_mesh(mesh_path: Path, points_path: Path, dst: Path, log=print) -> Path:
+    """Poisson 메쉬에서 측정점과 동떨어진 면과 바늘처럼 긴 삼각형(가시)을 지운다."""
+    import trimesh
+    from scipy.spatial import cKDTree
+    try:
+        m = trimesh.load(mesh_path, process=False, force="mesh")
+        pts = np.asarray(trimesh.load(points_path, process=False).vertices, float)
+        tree = cKDTree(pts)
+        sp = float(np.median(tree.query(pts[:: max(1, len(pts) // 20000)], k=2)[0][:, 1]))
+        d, _ = tree.query(m.triangles_center, workers=-1)
+        el = np.linalg.norm(m.vertices[m.faces] - m.vertices[np.roll(m.faces, 1, 1)], axis=2).max(1)
+        thin = el ** 2 / np.maximum(2 * m.area_faces, 1e-12)
+        far = d > 6 * sp
+        needle = (thin > 12) & (el > 8 * np.median(el))
+        n0 = len(m.faces)
+        m.update_faces(~(far | needle))
+        m.remove_unreferenced_vertices()
+        m.export(dst)
+        log(f"  메쉬 가시 정리: {n0:,} → {len(m.faces):,}면 (측정점과 먼 면 {int(far.sum()):,}, 바늘 {int(needle.sum()):,})")
+        return dst
+    except Exception as e:
+        log(f"  메쉬 가시 정리 생략({e})")
+        return mesh_path
+
+
 def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
                      quality: str = "medium", threads: int = 0, engine: str = "openmvs",
                      colmap_bin: str | None = None, log=print) -> dict:
@@ -118,16 +144,27 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
             raise RuntimeError("--dense colmap 은 CUDA 지원 COLMAP 실행파일(--colmap-bin)이 필요합니다")
         # VRAM 8GB 기준: 원본(-1)은 12MP 이상에서 메모리 부족 위험 → ultra 도 3200px
         size = {"draft": 1600, "medium": 2400, "high": 3200, "ultra": 3200}[quality]
-        fast = quality == "draft"  # 빠른 모드: 형상 일관성 단계 생략·반복 축소 → 조밀복원 시간 약 1/3
+        fast = quality == "draft"
+        # 형상 일관성(geom_consistency)은 빠른 모드에서도 켠다: 끄면 하늘·그늘·비스듬한 지면의 틀린 깊이가
+        # 걸러지지 않아 카메라 쪽으로 뻗는 '가시'가 생긴다(PC castle-P19). 빠른 모드는 반복만 줄인다.
         _run([colmap_bin, "patch_match_stereo", "--workspace_path", str(dense),
-              "--workspace_format", "COLMAP", "--PatchMatchStereo.geom_consistency", "0" if fast else "1",
-              "--PatchMatchStereo.max_image_size", str(size), "--PatchMatchStereo.gpu_index", "0"]
-             + (["--PatchMatchStereo.num_iterations", "3", "--PatchMatchStereo.window_step", "2"] if fast else []),
+              "--workspace_format", "COLMAP", "--PatchMatchStereo.geom_consistency", "1",
+              "--PatchMatchStereo.max_image_size", str(size), "--PatchMatchStereo.gpu_index", "0",
+              "--PatchMatchStereo.filter_min_ncc", "0.15"]
+             + (["--PatchMatchStereo.num_iterations", "4", "--PatchMatchStereo.window_step", "2"] if fast else []),
              mvs, log, logf)
-        fused = dense / "fused.ply"
+        fused = dense / "fused_raw.ply"
         _run([colmap_bin, "stereo_fusion", "--workspace_path", str(dense), "--workspace_format", "COLMAP",
-              "--input_type", "photometric" if fast else "geometric", "--StereoFusion.max_image_size", str(size),
+              "--input_type", "geometric", "--StereoFusion.max_image_size", str(size),
+              "--StereoFusion.min_num_pixels", "4", "--StereoFusion.max_reproj_error", "1.5",
+              "--StereoFusion.max_depth_error", "0.008", "--StereoFusion.max_normal_error", "8",
               "--output_path", str(fused)], mvs, log, logf)
+        from .pointfilter import clean_ply
+        cams = np.array([rec.image(i).projection_center() for i in rec.reg_image_ids()])
+        fused = clean_ply(fused, dense / "fused.ply", cams, log=log)
+        if fused.name != "fused.ply":
+            shutil.copy2(fused, dense / "fused.ply")
+            fused = dense / "fused.ply"
         _run([_bin("InterfaceCOLMAP"), "-i", str(dense), "-p", str(fused),
               "-o", str(mvs / "scene_dense.mvs"), "--image-folder", str(dense / "images")] + common,
              mvs, log, logf)
@@ -145,6 +182,7 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
         _run([colmap_bin, "poisson_mesher", "--input_path", str(dense / "fused.ply"),
               "--output_path", str(mesh), "--PoissonMeshing.depth", "10" if quality == "draft" else "11",
               "--PoissonMeshing.trim", "7"], mvs, log, logf)  # color 는 3.9=숫자, 4.x=on/off 라 지정 안 함
+        mesh = prune_mesh(mesh, dense / "fused.ply", mvs / "scene_mesh_pruned.ply", log=log)
     else:
         _run([_bin("ReconstructMesh"), str(dense_scene),
               "-o", str(mvs / "scene_mesh.mvs")] + common, mvs, log, logf)
