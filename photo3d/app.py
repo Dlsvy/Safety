@@ -544,7 +544,8 @@ class Handler(BaseHTTPRequestHandler):
         types = {".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css",
                  ".glb": "model/gltf-binary", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                  ".png": "image/png", ".json": "application/json", ".obj": "text/plain",
-                 ".log": "text/plain; charset=utf-8"}
+                 ".log": "text/plain; charset=utf-8", ".wasm": "application/wasm", ".svg": "image/svg+xml",
+                 ".ply": "application/octet-stream"}
         self.send_response(200)
         self.send_header("Content-Type", ctype or types.get(path.suffix.lower(), "application/octet-stream"))
         self.send_header("Content-Length", str(path.stat().st_size))
@@ -617,6 +618,11 @@ class Handler(BaseHTTPRequestHandler):
                 imgs = sorted((d / "out" / "work" / "images").glob("*.jpg")) or \
                     sorted(q for q in (d / "input").glob("*") if q.suffix.lower() in {".jpg", ".jpeg", ".png"})
                 return self._file(imgs[0]) if imgs else self._json({"error": "없음"}, 404)
+            if p in ("/supersplat", "/supersplat/"):  # 스플랫 편집기(SuperSplat, MIT) — ?load=/files/<id>/site_splat.ply
+                return self._file(WEB / "vendor" / "supersplat" / "index.html")
+            m = re.fullmatch(r"/supersplat/([\w./\-]+)", p)
+            if m and ".." not in m.group(1):
+                return self._file(WEB / "vendor" / "supersplat" / m.group(1))
             m = re.fullmatch(r"/vendor/([\w./\-]+\.js)", p)
             if m and ".." not in m.group(1):  # 내장 three.js (현장 오프라인에서도 뷰어 동작)
                 return self._file(WEB / "vendor" / m.group(1), "text/javascript; charset=utf-8")

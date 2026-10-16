@@ -22,6 +22,121 @@ _ASSET = {"win32": "brush-app-x86_64-pc-windows-msvc.zip",
           "linux": "brush-app-x86_64-unknown-linux-gnu.tar.xz"}
 
 
+SPIRULA_VERSION = "2026.10.16"
+_SP_ASSET = {"win32": f"spirula-{SPIRULA_VERSION}-windows-vulkan-x86_64.zip",
+             "linux": f"spirula-{SPIRULA_VERSION}-ubuntu-vulkan-x86_64.zip"}
+
+
+def find_spirula(root: Path, download: bool = True, log=print) -> str | None:
+    """Spirula Studio(GPLv3, 별도 프로그램으로 실행만 함) — 사진별 노출·화이트밸런스 보정(PPISP·bilateral grid),
+    표면 방향(normal) 지도 학습, 8GB 에서 수백만 개. third_party/spirula 에 없으면 공식 릴리스에서 내려받는다."""
+    if os.environ.get("SPIRULA_BIN") and Path(os.environ["SPIRULA_BIN"]).exists():
+        return os.environ["SPIRULA_BIN"]
+    tp = root / "third_party" / "spirula"
+    for name in ("spirula.exe", "spirula"):
+        hit = next(iter(sorted(q for q in tp.glob(f"**/{name}") if q.is_file())), None)
+        if hit:
+            return str(hit)
+    asset = _SP_ASSET.get(sys.platform)
+    if not download or not asset:
+        return None
+    import urllib.request
+    tp.mkdir(parents=True, exist_ok=True)
+    url = f"https://github.com/harry7557558/spirula-studio/releases/download/v{SPIRULA_VERSION}/{asset}"
+    log(f"  Spirula 내려받는 중: {url}")
+    arc = tp / asset
+    try:
+        urllib.request.urlretrieve(url, arc)
+        with zipfile.ZipFile(arc) as z:
+            z.extractall(tp)
+    except Exception as e:
+        log(f"  Spirula 내려받기 실패: {e}")
+        return None
+    finally:
+        arc.unlink(missing_ok=True)
+    for q in tp.glob("**/spirula*"):
+        if q.is_file() and q.suffix in ("", ".exe"):
+            q.chmod(0o755)
+            return str(q)
+    return None
+
+
+class _Chain:
+    """여러 명령을 차례로 백그라운드 실행(Popen 처럼 wait/terminate/kill 지원)."""
+
+    def __init__(self, cmds: list[list[str]], cwd: Path, logf):
+        import threading
+        self.cmds, self.cwd, self.logf = cmds, cwd, logf
+        self.cur, self.rc, self.stop = None, None, False
+        self.th = threading.Thread(target=self._run, daemon=True)
+        self.th.start()
+
+    def _run(self):
+        for c in self.cmds:
+            if self.stop:
+                break
+            self.logf.write("$ " + " ".join(c) + "\n")
+            self.logf.flush()
+            self.cur = subprocess.Popen(c, cwd=self.cwd, stdout=self.logf, stderr=subprocess.STDOUT)
+            r = self.cur.wait()
+            if r != 0 and c is self.cmds[-1]:
+                self.rc = r
+                return
+        self.rc = 0 if not self.stop else -1
+
+    def wait(self, timeout=None):
+        self.th.join(timeout)
+        if self.th.is_alive():
+            raise subprocess.TimeoutExpired("spirula", timeout)
+        return self.rc
+
+    def terminate(self):
+        self.stop = True
+        if self.cur and self.cur.poll() is None:
+            self.cur.terminate()
+
+    def kill(self):
+        self.stop = True
+        if self.cur and self.cur.poll() is None:
+            self.cur.kill()
+
+
+def start_splat_spirula(dense: Path, exe: str, steps: int = 30000, max_res: int = 1920, log=print) -> dict:
+    """Spirula 학습을 백그라운드로: ① 표면 방향 지도(MoGe-2, MIT) ② 학습(노출 보정·잡티 억제·조밀 점 시작)."""
+    import math
+    work = dense.parent / "splat"
+    if work.exists():
+        shutil.rmtree(work)
+    data = work / "data"
+    (data / "sparse" / "0").mkdir(parents=True)
+    for f in (dense / "sparse").glob("*.bin"):
+        shutil.copy2(f, data / "sparse" / "0" / f.name)
+    _seed_from_dense(dense, data / "sparse" / "0", log)  # data/init.ply = 조밀 점(최대 30만)
+    try:
+        os.symlink(dense / "images", data / "images", target_is_directory=True)
+    except OSError:
+        shutil.copytree(dense / "images", data / "images")
+    longest = 0
+    try:
+        import pycolmap
+        r = pycolmap.Reconstruction(data / "sparse" / "0")
+        longest = max(max(c.width, c.height) for c in r.cameras.values())
+    except Exception:
+        pass
+    div = max(1, math.ceil(longest / max_res)) if longest else 1
+    cap = os.environ.get("PHOTO3D_MAX_SPLATS", "3000000")
+    runs = work / "runs"
+    geo = [exe, "geometry", str(data), "--max-size", "1064", "--normal-format", "jpg"]
+    train = [exe, "train", "3dgs", "--data", str(data), "--num-iterations", str(steps), "--disable-viewer", "1",
+             "--scene-center", "none", "--seed-pointcloud", "init.ply", "--cap-max", cap,
+             "--floater-suppression", "mild", "--train-resolution-divisor", str(div),
+             "--output-dir-prefix", str(runs), "--output-dir-name", "run"]
+    log(f"  $ spirula train --total-steps {steps} (표면 방향 지도 → 학습, 해상도 1/{div}, 최대 {int(cap):,}개, 백그라운드 GPU)")
+    logf = open(work / "brush.log", "w", encoding="utf-8", errors="replace")  # 진행 표시가 같은 파일을 읽음
+    proc = _Chain([geo, train], work, logf)
+    return {"proc": proc, "logf": logf, "work": work, "exp": runs, "steps": steps, "engine": "spirula"}
+
+
 def find_brush(root: Path, download: bool = True, log=print) -> str | None:
     """third_party/brush 에서 brush_app 실행파일을 찾고, 없으면 내려받는다."""
     if os.environ.get("BRUSH_BIN") and Path(os.environ["BRUSH_BIN"]).exists():
@@ -157,6 +272,15 @@ def start_splat(dense: Path, brush: str, steps: int = 30000, max_res: int = 1920
     return {"proc": proc, "logf": logf, "work": work, "exp": exp, "steps": steps}
 
 
+def _link_as_step(p: Path) -> Path:
+    """Spirula 출력 이름(step-N.ckpt/splat.ply)을 Brush 와 같은 splat_N.ply 로 맞춘다(뒤 처리 공용)."""
+    n = int(p.parent.name.split("-")[1].split(".")[0])
+    dst = p.parent.parent / f"splat_{n}.ply"
+    if not dst.exists():
+        shutil.copy2(p, dst)
+    return dst
+
+
 def finish_splat(h: dict, out: Path, log=print, max_wait: float | None = None) -> dict:
     """학습 끝을 기다린다. max_wait(초)를 넘기면 멈추고 마지막 중간 저장본을 쓴다(빠른 모드)."""
     stopped = False
@@ -170,8 +294,13 @@ def finish_splat(h: dict, out: Path, log=print, max_wait: float | None = None) -
             h["proc"].kill()
         r, stopped = 0, True
     h["logf"].close()
-    plys = sorted((p for p in h["exp"].glob("splat_*.ply") if p.stat().st_size > 0),
-                  key=lambda p: int(p.stem.split("_")[-1]))
+    if h.get("engine") == "spirula":  # runs/run/step-000030000.ckpt/splat.ply
+        plys = sorted((p for p in h["exp"].glob("**/step-*.ckpt/splat.ply") if p.stat().st_size > 0),
+                      key=lambda p: int(p.parent.name.split("-")[1].split(".")[0]))
+        plys = [_link_as_step(p) for p in plys]
+    else:
+        plys = sorted((p for p in h["exp"].glob("splat_*.ply") if p.stat().st_size > 0),
+                      key=lambda p: int(p.stem.split("_")[-1]))
     if stopped:
         log(f"  스플랫 시간 상한 도달 → 중간 저장본 사용({plys[-1].stem.split('_')[-1] if plys else '없음'}스텝)")
     if r != 0 or not plys:
