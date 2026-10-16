@@ -530,7 +530,7 @@ async function refresh() {
     for (const id of [...live.keys()]) if (!d.jobs.some((j) => j.id === id && (j.status === "running" || j.status === "queued"))) live.delete(id);
     const lan = d.lan.length ? `같은 와이파이의 폰에서 접속: <span class="lan">${d.lan.join("  ")}</span>` : "";
     const gpu = d.tools.colmap ? "GPU(COLMAP) 사용" : "CPU 로 처리(느림)";
-    $("tip").innerHTML = `${lan}${lan ? " · " : ""}${gpu}`;
+    $("tip").innerHTML = `${lan}${lan ? " · " : ""}${gpu} · 버전 ${d.version || "?"}`;
   } catch (e) { $("list").innerHTML = `<div class="empty">앱 서버에 연결할 수 없습니다 — APP.bat 창이 켜져 있는지 확인하세요.</div>`; }
 }
 refresh(); setInterval(refresh, 3000);

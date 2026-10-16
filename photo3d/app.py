@@ -456,6 +456,15 @@ def run_job(jid: str) -> None:
     save_job(job)
 
 
+def app_version() -> str:
+    try:
+        return subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True, text=True,
+                              timeout=5, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.strip() or "?"
+    except Exception:
+        return "?"
+
+
+VERSION = app_version()
 _RUNNING: dict = {}   # 작업 id → 실행 중인 처리 프로세스
 _CURRENT: dict = {"id": None, "t": 0}  # 작업자가 지금 맡은 작업
 _STOPPED: set = set()
@@ -713,7 +722,9 @@ class Handler(BaseHTTPRequestHandler):
                         stop_job(_CURRENT["id"])
                     else:
                         j["wait_info"] = "곧 시작합니다"
-                return self._json({"jobs": jobs, "tools": find_tools(), "lan": lan_urls()})
+                return self._json({"jobs": jobs, "tools": find_tools(), "lan": lan_urls(), "version": VERSION,
+                                   "worker": {"busy": _CURRENT["id"],
+                                              "for_s": int(time.time() - _CURRENT["t"]) if _CURRENT["id"] else 0}})
             m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})", p)
             if m:
                 return self._json(job_view(load_job(m.group(1))))
