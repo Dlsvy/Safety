@@ -538,7 +538,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
 
-    def _file(self, path: Path, ctype: str | None = None):
+    def _file(self, path: Path, ctype: str | None = None, download: str | None = None):
         if not path.is_file():
             return self._json({"error": "없음"}, 404)
         types = {".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css",
@@ -546,12 +546,42 @@ class Handler(BaseHTTPRequestHandler):
                  ".png": "image/png", ".json": "application/json", ".obj": "text/plain",
                  ".log": "text/plain; charset=utf-8", ".wasm": "application/wasm", ".svg": "image/svg+xml",
                  ".ply": "application/octet-stream"}
-        self.send_response(200)
+        size = path.stat().st_size
+        start, end = 0, size - 1
+        rng = re.fullmatch(r"bytes=(\d*)-(\d*)", self.headers.get("Range", "") or "")
+        if rng and size:  # 이어받기(브라우저 '다시 시작')
+            if rng.group(1):
+                start = int(rng.group(1))
+                end = int(rng.group(2)) if rng.group(2) else size - 1
+            elif rng.group(2):
+                start = max(0, size - int(rng.group(2)))
+            end = min(end, size - 1)
+            if start > end:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.end_headers()
+                return
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        else:
+            self.send_response(200)
         self.send_header("Content-Type", ctype or types.get(path.suffix.lower(), "application/octet-stream"))
-        self.send_header("Content-Length", str(path.stat().st_size))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(end - start + 1))
+        if download:  # 한글 파일 이름(RFC 5987)
+            from urllib.parse import quote
+            self.send_header("Content-Disposition", f"attachment; filename=\"download{path.suffix}\"; "
+                                                    f"filename*=UTF-8''{quote(download)}")
         self.end_headers()
+        left = end - start + 1
         with open(path, "rb") as f:
-            shutil.copyfileobj(f, self.wfile, 1 << 20)
+            f.seek(start)
+            while left > 0:
+                b = f.read(min(1 << 20, left))
+                if not b:
+                    break
+                self.wfile.write(b)
+                left -= len(b)
 
     def _body_json(self) -> dict:
         n = int(self.headers.get("Content-Length", 0) or 0)
@@ -627,8 +657,9 @@ class Handler(BaseHTTPRequestHandler):
             if m and ".." not in m.group(1):  # 내장 three.js (현장 오프라인에서도 뷰어 동작)
                 return self._file(WEB / "vendor" / m.group(1), "text/javascript; charset=utf-8")
             m = re.fullmatch(r"/files/([0-9a-f]{12})/([\w.\-]+)", p)
-            if m:  # 결과 파일(site_model.glb, site_collider.glb, report.json ...)
-                return self._file(job_dir(m.group(1)) / "out" / m.group(2))
+            if m:  # 결과 파일(site_model.glb, site_collider.glb, report.json ...) — ?dl=이름 이면 내려받기
+                q = parse_qs(u.query).get("dl", [None])[0]
+                return self._file(job_dir(m.group(1)) / "out" / m.group(2), download=q)
             return self._json({"error": "없는 경로"}, 404)
         except KeyError:
             return self._json({"error": "작업 없음"}, 404)
@@ -636,6 +667,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         p = unquote(urlparse(self.path).path)
         try:
+            m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/open", p)
+            if m:  # 이 PC 에서만: 결과 폴더를 탐색기로 열기(내려받기가 안 될 때 바로 복사)
+                if self.client_address[0] not in ("127.0.0.1", "::1"):
+                    return self._json({"error": "PC 에서만 쓸 수 있습니다"}, 403)
+                d = job_dir(m.group(1)) / "out"
+                if os.name == "nt":
+                    os.startfile(str(d))  # noqa: S606
+                return self._json({"path": str(d)})
             if p == "/api/gpu/tune":  # 이 PC 에서만: 관리자 확인 창을 띄워 GPU 최적 설정(scripts/gpu_tune.ps1)
                 if self.client_address[0] not in ("127.0.0.1", "::1"):
                     return self._json({"error": "PC 에서만 쓸 수 있습니다"}, 403)

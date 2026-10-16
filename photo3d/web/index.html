@@ -234,6 +234,7 @@ details input{margin-top:6px;width:100%}
     <button id="camsb" aria-pressed="false" hidden>촬영 위치</button>
     <button id="apanelb" aria-pressed="false">표시 목록</button>
     <a class="btn" id="dl" download>GLB 내려받기</a>
+    <button id="openf" title="이 PC 에서 결과 폴더(GLB·스플랫·보고서)를 탐색기로 엽니다">결과 폴더</button>
     <button id="close">닫기</button>
   </div>
   <aside class="apanel" id="apanel" hidden aria-label="현장 표시 목록">
@@ -572,8 +573,9 @@ async function openViewer(j) {
   try { await initViewer(); } catch (e) { $("vinfo").textContent = "3D 뷰어를 불러오지 못했습니다. GLB 내려받기는 됩니다."; 
     $("dl").href = `/files/${j.id}/site_model.glb`; return; }
   resize();
-  $("vt").textContent = j.name; $("dl").href = `/files/${j.id}/site_model.glb`;
+  $("vt").textContent = j.name; $("dl").href = `/files/${j.id}/site_model.glb?dl=${encodeURIComponent(j.name + ".glb")}`;
   $("dl").setAttribute("download", `${j.name}.glb`);
+  $("openf").onclick = () => api(`/api/jobs/${j.id}/open`, {method: "POST"}).catch((e) => alert(e.message));
   useFill = !!j.has_filled; showEst = false; useSplat = !!j.has_splat;
   $("fillb").hidden = !j.has_filled; $("estb").hidden = !j.has_est; $("splatb").hidden = !j.has_splat;
   $("ssedit").hidden = !j.has_splat;
