@@ -49,6 +49,28 @@ def _run(args: list[str], cwd: Path, log, logfile: Path):
         raise RuntimeError(f"{Path(args[0]).name} 실패 (로그: {logfile})")
 
 
+def _color_from_points(mesh_path: Path, points_path: Path, mvs: Path, log) -> Path:
+    """메쉬 정점마다 가장 가까운 조밀 점의 색을 입힌다(텍스처 실패 시 최후 대체)."""
+    import numpy as np
+    import trimesh
+    from scipy.spatial import cKDTree
+    try:
+        m = trimesh.load(mesh_path, process=False, force="mesh")
+        pc = trimesh.load(points_path, process=False)
+        cols = getattr(pc, "colors", None)
+        if cols is None or len(cols) == 0:
+            cols = pc.visual.vertex_colors
+        _, idx = cKDTree(np.asarray(pc.vertices)).query(m.vertices, workers=-1)
+        m.visual = trimesh.visual.ColorVisuals(m, vertex_colors=np.asarray(cols)[idx])
+        out = mvs / "scene_mesh_colored.ply"
+        m.export(out)
+        log(f"  점군 색 입힘: {len(m.vertices):,}정점")
+        return out
+    except Exception as e:
+        log(f"  점군 색 입히기 실패({e}) → 색 없는 메쉬 사용")
+        return mesh_path
+
+
 def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
                      quality: str = "medium", threads: int = 0, engine: str = "openmvs",
                      colmap_bin: str | None = None, log=print) -> dict:
@@ -140,12 +162,12 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
                 log(f"  텍스처 평균 밝기 {bright:.0f}/255")
                 if bright < 20 and mesh.exists():
                     log("  경고: 텍스처가 거의 검음(사진 로딩 실패 의심) → 점군 색 메쉬로 대체")
-                    obj = mesh
+                    obj = _color_from_points(mesh, dense / "fused.ply", mvs, log)
         except Exception as e:
             log(f"  텍스처 점검 생략: {e}")
     if not obj.exists():
         if engine == "colmap" and mesh.exists():
-            obj = mesh  # 사진 텍스처 대신 점군 색을 입힌 메쉬
+            obj = _color_from_points(mesh, dense / "fused.ply", mvs, log)  # 사진 텍스처 대신 점군 색
         else:
             raise RuntimeError("텍스처 메쉬가 생성되지 않았습니다")
     ply = mvs / "scene_dense.ply"
