@@ -49,7 +49,10 @@ Write-Host ("총 소요: {0:N1} 분" -f ((Get-Date) - $t0).TotalMinutes)
 $glb = Join-Path $Out "site_model.glb"
 if (Test-Path $glb) {
     Write-Host "결과: $glb"
-    try { Start-Process $glb } catch { Write-Host "기본 3D 뷰어가 없습니다. https://gltf-viewer.donmccurdy.com 에 이 파일을 끌어다 놓으세요." }
+    # .glb 를 여는 기본 앱이 없는 PC 가 많다 → 결과 폴더(파일 선택된 채)와 웹 뷰어를 연다
+    Start-Process explorer.exe "/select,`"$glb`""
+    Start-Process "https://gltf-viewer.donmccurdy.com/"
+    Write-Host "웹 뷰어 화면에 site_model.glb 를 끌어다 놓으면 3D 를 돌려 볼 수 있습니다."
 } else {
     Write-Host "결과 파일이 없습니다. 아래 로그 끝부분을 캡처해서 보내주세요."
     $lf = Join-Path $Out "work\openmvs.log"
