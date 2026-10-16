@@ -224,6 +224,7 @@ details input{margin-top:6px;width:100%}
   <div class="vbar">
     <span class="t" id="vt"></span>
     <button id="splatb" aria-pressed="false" hidden>실사 보기</button>
+    <a class="btn" id="dlspz" hidden download title="실사(스플랫) 압축본 — SuperSplat·Postshot 등에서 열림, 원본의 약 1/10">실사 .spz</a>
     <button id="ssedit" hidden title="SuperSplat 편집기(새 탭): 남은 잡티를 브러시·상자로 지우고 자르기·내보내기">실사 편집</button>
     <button id="fillb" aria-pressed="false" hidden>구멍 메움</button>
     <button id="estb" aria-pressed="false" hidden>메운 곳 표시</button>
@@ -580,7 +581,8 @@ async function openViewer(j) {
   $("openf").onclick = () => api(`/api/jobs/${j.id}/open`, {method: "POST"}).catch((e) => alert(e.message));
   useFill = !!j.has_filled; showEst = false; useSplat = !!j.has_splat;
   $("fillb").hidden = !j.has_filled; $("estb").hidden = !j.has_est; $("splatb").hidden = !j.has_splat;
-  $("ssedit").hidden = !j.has_splat;
+  $("ssedit").hidden = !j.has_splat; $("dlspz").hidden = !j.has_splat;
+  $("dlspz").href = `/files/${j.id}/site_splat.spz?dl=${encodeURIComponent(j.name + ".spz")}`;
   $("ssedit").onclick = () => window.open(`/supersplat/?load=${encodeURIComponent(`/files/${j.id}/site_splat.ply`)}&filename=${encodeURIComponent((j.name || "site") + ".ply")}&lng=ko`, "_blank", "noopener");
   $("camsb").hidden = !j.has_cams; camsOn = false; camData = null; $("camsb").classList.remove("on"); $("aphoto").hidden = true;
   if (camG) camG.clear();

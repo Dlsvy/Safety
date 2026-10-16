@@ -410,7 +410,16 @@ def finish_splat(h: dict, out: Path, log=print, max_wait: float | None = None) -
     else:
         n = clean["after"]
     log(f"  스플랫 {n:,}개 → {dst.name} ({dst.stat().st_size / 1e6:.0f} MB)")
-    return {"file": dst.name, "splats": n, "clean": clean, "steps": int(plys[-1].stem.split("_")[-1]), "up_axis": "Z",
+    light = {}
+    try:  # 가벼운 형식: .spz(보관·공유, 약 1/10~1/16) · .splat(웹 뷰어)
+        from .splatexport import write_spz, write_splat
+        write_spz(dst, out / "site_splat.spz")
+        write_splat(dst, out / "site_splat.splat")
+        light = {f: round((out / f).stat().st_size / 1e6, 1) for f in ("site_splat.spz", "site_splat.splat")}
+        log(f"  가벼운 스플랫: .spz {light['site_splat.spz']} MB · .splat {light['site_splat.splat']} MB")
+    except Exception as e:
+        log(f"  가벼운 스플랫 내보내기 생략: {e}")
+    return {"file": dst.name, "splats": n, "clean": clean, "light_mb": light, "steps": int(plys[-1].stem.split("_")[-1]), "up_axis": "Z",
             "note": "보기용. 메쉬 GLB(Y-up)와 맞추려면 X축 -90° 회전"}
 
 
