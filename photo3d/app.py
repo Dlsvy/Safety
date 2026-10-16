@@ -302,7 +302,16 @@ def side_tasks(d: Path, lines: list[str]) -> list[str]:
 HIST = DATA / "timing_history.json"
 # 기록이 없을 때 쓰는 단계별 '사진 1장당 초'(RTX 5060 Ti 8GB 기준 어림값). 처리가 끝날 때마다 이 PC 의 실제 기록으로 바뀐다
 DEFAULT_SPI = {"fast": {"1": 0.5, "2": 1.5, "3": 0.2, "4": 10.0, "5": 3.0},
-               "best": {"1": 0.8, "2": 3.0, "3": 0.3, "4": 35.0, "5": 25.0}}
+               "best": {"1": 0.8, "2": 3.0, "3": 0.3, "4": 35.0, "5": 25.0},
+               # 포토그래메트리: 스플랫 대기 없음, 대신 해상도↑·구멍 메우기·정사영상/DSM/점군
+               "pg-fast": {"1": 0.6, "2": 2.0, "3": 0.2, "4": 14.0, "5": 4.0},
+               "pg-best": {"1": 0.8, "2": 3.0, "3": 0.3, "4": 35.0, "5": 6.0}}
+
+
+def _mkey(job: dict) -> str:
+    """시간 기록·예측용 모드 이름(포토그래메트리 탭은 따로 기록)"""
+    m = job.get("mode", "fast")
+    return f"pg-{m}" if job.get("kind") == "pg" else m
 
 
 def _hist() -> list:
@@ -323,7 +332,7 @@ def record_timing(d: Path, job: dict) -> None:
             if m:
                 st[m.group(1)] = float(sec)
         if n and st:
-            h = _hist()[-39:] + [{"mode": job.get("mode", "fast"), "n": n, "s": st, "t": time.time()}]
+            h = _hist()[-39:] + [{"mode": _mkey(job), "n": n, "s": st, "t": time.time()}]
             HIST.write_text(json.dumps(h, ensure_ascii=False), encoding="utf-8")
     except Exception:
         pass
@@ -363,7 +372,7 @@ def overall_progress(d: Path, lines: list[str], step: int, job: dict) -> tuple[i
     예전: (지금까지 걸린 시간 ÷ 진행률) — 단계마다 걸리는 시간이 크게 달라(3D 생성이 대부분) 앞쪽에서 너무 짧게 잡혔다.
     지금: 단계별 예상 시간 = 사진 수 × 이 PC 의 과거 기록(사진 1장당 초, 같은 모드 중앙값) × 이번 작업의 속도 보정.
     진행 중인 단계는 실제 진행(깊이 지도 장수 등)이 있으면 그 속도로, 없으면 예상 시간에서 뺀다."""
-    mode = job.get("mode", "fast")
+    mode = _mkey(job)
     n = _n_images(d, lines, job)
     spi = _spi(mode)
     exp = {k: spi[k] * n for k in spi}
@@ -442,7 +451,7 @@ def job_view(job: dict) -> dict:
     if job["status"] == "queued":  # 시작 전 예상 총 시간(이 PC 의 과거 기록 기준)
         try:
             n = _n_images(d, [], job)
-            v["eta_min"] = max(1, int(round(sum(_spi(job.get("mode", "fast")).values()) * n / 60)))
+            v["eta_min"] = max(1, int(round(sum(_spi(_mkey(job)).values()) * n / 60)))
         except Exception:
             pass
     rep = d / "out" / "report.json"
@@ -462,6 +471,8 @@ def job_view(job: dict) -> dict:
     v["has_est"] = (d / "out" / "site_estimated.glb").exists()
     v["has_splat"] = (d / "out" / "site_splat.ply").exists()
     v["has_ortho"] = (d / "out" / "site_ground_ortho.jpg").exists()
+    v["has_survey"] = (d / "out" / "site_ortho.jpg").exists()
+    v["has_las"] = (d / "out" / "site_points.las").exists()
     v["has_report"] = (d / "out" / "quality_report.html").exists()
     v["has_cams"] = (d / "out" / "cameras.json").exists()
     v["files"] = len([p for p in (d / "input").iterdir()]) if (d / "input").exists() else 0
@@ -510,6 +521,8 @@ def run_job(jid: str) -> None:
     src = job.get("local_path") or str(d / "input")
     profile = "gpu-max" if job.get("mode") == "best" else "fast"
     cmd = [sys.executable, "-m", "photo3d", "run", src, "--profile", profile, "--out", str(d / "out")]
+    if job.get("kind") == "pg":
+        cmd += ["--pipeline", "pg"]
     if tools["colmap"]:
         cmd += ["--colmap-bin", tools["colmap"]]
     if job.get("scale"):
@@ -915,7 +928,8 @@ class Handler(BaseHTTPRequestHandler):
                 job = {"id": jid, "name": (b.get("name") or "현장").strip()[:60], "status": "uploading",
                        "created": time.time(), "local_path": lp or None,
                        "scale": b.get("scale") or None, "marker_size": b.get("marker_size") or None,
-                       "mode": "best" if b.get("mode") == "best" else "fast", "subject": bool(b.get("subject"))}
+                       "mode": "best" if b.get("mode") == "best" else "fast", "subject": bool(b.get("subject")),
+                       "kind": "pg" if b.get("kind") == "pg" else "splat"}
                 save_job(job)
                 return self._json(job, 201)
             m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/stop", p)

@@ -155,14 +155,24 @@ def decimate(mesh: trimesh.Trimesh, target_faces: int) -> trimesh.Trimesh:
 
 def export_all(textured_obj: Path, out: Path, cam_centers: np.ndarray | None,
                visual_faces: int = 1_500_000, collider_faces: int = 150_000,
-               meta: dict | None = None, log=print) -> dict:
+               meta: dict | None = None, extra: list | None = None, extra_fn=None, log=print) -> dict:
+    """extra: 함께 내보낼 추가 메쉬(Z-up, 예: 사진 바닥 조각) — GLB·OBJ 에 별도 물체로, 충돌 메쉬에는 합쳐서."""
     out.mkdir(parents=True, exist_ok=True)
     mesh = _load(textured_obj)
     mesh = clean_mesh(mesh, cam_centers, log=log)
     files = {}
     # 라이노/CAD 확인용 (Z-up, m)
+    if extra_fn is not None:  # 정리된 메쉬를 보고 추가 메쉬를 만든다(예: 측정이 빈 바닥만 사진 바닥으로)
+        try:
+            extra = list(extra or []) + list(extra_fn(mesh) or [])
+        except Exception as e:
+            log(f"  추가 메쉬 생략: {e}")
+    extra = [e for e in (extra or []) if e is not None and len(e.faces)]
     p = out / "site_model_zup.obj"
-    mesh.export(p)
+    if extra:
+        trimesh.Scene([mesh] + extra).export(p)
+    else:
+        mesh.export(p)
     files["obj_zup"] = p.name
     # 유니티 보기용 GLB (Y-up)
     vis = mesh
@@ -171,10 +181,21 @@ def export_all(textured_obj: Path, out: Path, cam_centers: np.ndarray | None,
     g = vis.copy()
     g.apply_transform(ZUP_TO_YUP)
     p = out / "site_model.glb"
-    g.export(p)
+    if extra:
+        sc = trimesh.Scene([g])
+        for i, e in enumerate(extra):
+            e2 = e.copy()
+            e2.apply_transform(ZUP_TO_YUP)
+            sc.add_geometry(e2, geom_name=f"photo_floor_{i}")
+        sc.export(p)
+    else:
+        g.export(p)
     files["glb"] = p.name
     # 충돌 판정용 (텍스처 없음, Y-up)
-    col = decimate(mesh, collider_faces)
+    geo = trimesh.Trimesh(mesh.vertices, mesh.faces, process=False)
+    if extra:
+        geo = trimesh.util.concatenate([geo] + [trimesh.Trimesh(e.vertices, e.faces, process=False) for e in extra])
+    col = decimate(geo, collider_faces)
     col.apply_transform(ZUP_TO_YUP)
     p = out / "site_collider.glb"
     col.export(p)
@@ -182,10 +203,12 @@ def export_all(textured_obj: Path, out: Path, cam_centers: np.ndarray | None,
     p = out / "site_collider.obj"
     col.export(p)
     files["collider_obj"] = p.name
-    b = mesh.bounds
+    b = mesh.bounds if not extra else np.array([np.minimum(mesh.bounds[0], np.min([e.bounds[0] for e in extra], 0)),
+                                                 np.maximum(mesh.bounds[1], np.max([e.bounds[1] for e in extra], 0))])
     info = {"faces": int(len(mesh.faces)), "collider_faces": int(len(col.faces)),
             "bounds_zup_m": b.round(3).tolist(), "size_m": (b[1] - b[0]).round(3).tolist(),
-            "files": files}
+            "files": files, "extra_parts": len(extra)}
+    info["_extra"] = extra
     with open(out / "site_meta.json", "w", encoding="utf-8") as f:
         json.dump({**(meta or {}), "model": info}, f, ensure_ascii=False, indent=2, default=str)
     log(f"  내보내기: {out} (크기 {info['size_m']} m)")

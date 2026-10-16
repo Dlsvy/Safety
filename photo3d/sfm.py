@@ -72,7 +72,7 @@ def _run_cli(colmap: str, image_dir: Path, work: Path, sequential: bool, single_
              camera_model: str, mapper: str, use_gpu: bool, log, features: str = "sift",
              mask_dir: Path | None = None, max_side: int = 3200,
              max_features: int = 12000, camera_params: str | None = None,
-             rig: list | None = None, per_folder: bool = False) -> list[pycolmap.Reconstruction]:
+             rig: list | None = None, per_folder: bool = False, robust: bool = True) -> list[pycolmap.Reconstruction]:
     """COLMAP 4.x 실행파일(윈도우 CUDA 릴리스 등)로 SfM. GPU 로 수 배 빠르고 ALIKED/LightGlue 사용 가능."""
     import subprocess
     db = work / "database.db"
@@ -115,6 +115,8 @@ def _run_cli(colmap: str, image_dir: Path, work: Path, sequential: bool, single_
                     "--Mapper.ba_refine_extra_params", "0", "--Mapper.min_num_matches", "10",
                     "--Mapper.abs_pose_min_num_inliers", "15", "--Mapper.structure_less_registration_fallback", "1"]
         mapper = "incremental"  # 리그는 증분 매퍼가 안정적
+    if robust and not rig:  # COLMAP 4.2: 한 평면이 대부분인 장면(벽·바닥·거푸집) 오매칭 방지 — pycolmap 경로와 같게
+        mat += ["--TwoViewGeometry.use_degensac", "1"]
     if rig:
         run("sequential_matcher", "--database_path", str(db), *mat, "--SequentialMatching.overlap", "8",
             "--SequentialMatching.quadratic_overlap", "0", "--SequentialMatching.expand_rig_images", "1",
@@ -175,7 +177,7 @@ def run_sfm(image_dir: Path, work: Path, sequential: bool, single_camera: bool =
         recs = _run_cli(colmap_bin, image_dir, work, sequential, single_camera, camera_model,
                         mapper, use_gpu, log, features=features, mask_dir=mask_dir,
                         max_side=max_side, max_features=max_features, camera_params=camera_params,
-                        rig=rig, per_folder=per_folder)
+                        rig=rig, per_folder=per_folder, robust=robust)
         if not recs:
             raise RuntimeError("SfM 실패: 이미지 간 겹침이 부족합니다(사진 간 60~80% 겹치게 촬영)")
         return _finish(dict(enumerate(recs)), n_imgs, log, refine_pp, robust,

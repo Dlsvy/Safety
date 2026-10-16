@@ -58,6 +58,18 @@ button:focus-visible,.btn:focus-visible,input:focus-visible{outline:2px solid va
 .mode label strong{display:block;color:var(--ink);font-size:14px}
 .mode label:has(input:checked){border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
 .mode input{accent-color:var(--accent);margin-top:3px}
+.tabs{display:flex;gap:0;margin:-18px -18px 16px;border-bottom:1px solid var(--line)}
+.tabs button{flex:1;border:0;border-radius:0;background:transparent;padding:12px 10px;font-weight:600;color:var(--muted);
+  border-bottom:3px solid transparent;display:block;text-align:center}
+.tabs button:first-child{border-top-left-radius:10px}.tabs button:last-child{border-top-right-radius:10px}
+.tabs button[aria-selected=true]{color:var(--ink);border-bottom-color:var(--accent);background:var(--bg)}
+.tabs button small{display:block;font-weight:400;font-size:12px;color:var(--muted)}
+.pginfo{font-size:13px;color:var(--muted);border-left:3px solid var(--accent);padding:6px 10px;margin:0 0 10px;background:var(--bg);border-radius:0 8px 8px 0}
+.pginfo b{color:var(--ink)}
+[data-kind=pg] .only-splat{display:none}
+[data-kind=splat] .only-pg{display:none}
+.kind{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:0 8px}
+.kind.pg{border-color:var(--accent)}
 .guide ol{margin:8px 0 4px;padding-left:20px;display:grid;gap:4px;color:var(--ink);line-height:1.5}
 .guide .n{font-size:12px;color:var(--muted);margin:4px 0 0}
 details{margin:6px 0 12px;font-size:13px;color:var(--muted)}
@@ -171,8 +183,16 @@ details input{margin-top:6px;width:100%}
     <div class="sys" id="sys" aria-label="컴퓨터 사용량"></div>
   </header>
 
-  <section class="panel" aria-labelledby="newh">
-    <h2 id="newh">새 3D 만들기</h2>
+  <section class="panel" aria-labelledby="newh" id="newp" data-kind="splat">
+    <div class="tabs" role="tablist" aria-label="만드는 방식">
+      <button role="tab" id="tab-splat" aria-selected="true" data-kind="splat">가우시안 스플래팅<small>실사처럼 보기 · 메쉬 + 실사</small></button>
+      <button role="tab" id="tab-pg" aria-selected="false" data-kind="pg">포토그래메트리<small>측정·도면용 3D · 정사영상·DSM·점군</small></button>
+    </div>
+    <h2 id="newh">새 3D 만들기 <span class="only-pg">— 포토그래메트리</span></h2>
+    <div class="pginfo only-pg">사진으로 <b>치수를 잴 수 있는 3D</b>를 만듭니다(스플랫 없이 GPU 를 측정에 전부 사용).
+      결과: 텍스처 메쉬(유니티 GLB·라이노 OBJ), <b>정사영상</b>(위에서 본 현장 사진, 1px 크기 일정),
+      <b>DSM</b>(높이 지도), <b>점군 LAS</b>(CloudCompare·Civil3D·Revit), 바닥·벽 평면 정리.
+      폰 사진 → 360 → 드론 → 영상 순으로 정확합니다. 드론 사진의 GPS·기준점(gcp_list.txt)은 자동으로 씁니다.</div>
     <div class="row"><input id="name" type="text" placeholder="현장 이름 (예: 3공구 북측 옹벽)" autocomplete="off"></div>
     <div class="pick">
       <label for="files"><strong>파일 고르기</strong>사진·영상 여러 장</label>
@@ -186,10 +206,10 @@ details input{margin-top:6px;width:100%}
     <div class="samples" id="samples"></div>
     <div class="chosen" id="chosen">선택한 파일 없음 · 한쪽 면은 5~6장, 한 바퀴는 15~20장, 또는 1~2분 영상(천천히 걷기) · 360 카메라: 펼친 영상·사진(2:1) 또는 Insta360 원본(.insv·.insp)도 됩니다</div>
     <div class="mode" role="radiogroup" aria-label="품질">
-      <label><input type="radio" name="mode" value="fast" checked><span><strong>빠르게</strong>약 5~10분 · 프로토타입(해상도 낮춤·구멍 메우기 생략)</span></label>
-      <label><input type="radio" name="mode" value="best"><span><strong>최고 품질</strong>GPU 최대 · 15~30분</span></label>
+      <label><input type="radio" name="mode" value="fast" checked><span><strong>빠르게</strong><span class="only-splat">약 5~10분 · 프로토타입(해상도 낮춤·구멍 메우기 생략)</span><span class="only-pg">약 10~15분 · 현장 검토용(2400px)</span></span></label>
+      <label><input type="radio" name="mode" value="best"><span><strong><span class="only-splat">최고 품질</span><span class="only-pg">정밀 측정</span></strong><span class="only-splat">GPU 최대 · 15~30분</span><span class="only-pg">원본 해상도 · GPU 최대 · 20~40분</span></span></label>
     </div>
-    <label class="subj"><input type="checkbox" id="subject"> <strong>사람·물체 모드</strong> — 사람·장비·조형물처럼 가운데 대상 하나를 둘러 찍었을 때: 배경을 자동으로 빼고 대상만 선명하게(실사 보기)</label>
+    <label class="subj only-splat"><input type="checkbox" id="subject"> <strong>사람·물체 모드</strong> — 사람·장비·조형물처럼 가운데 대상 하나를 둘러 찍었을 때: 배경을 자동으로 빼고 대상만 선명하게(실사 보기)</label>
     <details class="guide"><summary>촬영 가이드 (현장 안전관리자용)</summary>
       <ol>
         <li>사람·장비가 적은 밝은 시간에 찍으세요. 렌즈를 닦고 배터리·저장공간을 확인합니다.</li>
@@ -242,6 +262,9 @@ details input{margin-top:6px;width:100%}
     <span class="t" id="vt"></span>
     <button id="splatb" aria-pressed="false" hidden>실사 보기</button>
     <a class="btn" id="dlspz" hidden download title="실사(스플랫) 압축본 — SuperSplat·Postshot 등에서 열림, 원본의 약 1/10">실사 .spz</a>
+    <a class="btn" id="dlsortho" hidden target="_blank" title="정사영상: 텍스처 메쉬를 위에서 수직으로 본 현장 사진(1px 크기 일정, 월드파일 .jgw 포함)">정사영상</a>
+    <a class="btn" id="dldsm" hidden target="_blank" title="DSM 높이 지도(색=높이). 실제 높이 값은 site_dsm.tif(m)">높이 지도</a>
+    <a class="btn" id="dllas" hidden download title="점군 LAS — CloudCompare·Civil3D·Revit·ReCap·Rhino 에서 열림">점군 LAS</a>
     <a class="btn" id="dlortho" hidden target="_blank" title="사진으로 만든 바닥 정사영상(위에서 내려다본 바닥) — 크기 정보는 site_ground_ortho.json">바닥 사진</a>
     <button id="ssedit" hidden title="SuperSplat 편집기(새 탭): 남은 잡티를 브러시·상자로 지우고 자르기·내보내기">실사 편집</button>
     <button id="fillb" aria-pressed="false" hidden>구멍 메움</button>
@@ -281,6 +304,15 @@ const $ = (id) => document.getElementById(id);
 const fmtT = (s) => s ? new Date(s * 1000).toLocaleString("ko-KR", {month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit"}) : "";
 const STATUS = {uploading:"올리는 중", queued:"대기", running:"처리 중", done:"완료", failed:"실패"};
 let picked = [];
+let curKind = "splat";
+function setKind(k) {
+  curKind = k === "pg" ? "pg" : "splat";
+  $("newp").dataset.kind = curKind;
+  for (const b of document.querySelectorAll(".tabs [role=tab]")) b.setAttribute("aria-selected", b.dataset.kind === curKind);
+  $("go").textContent = curKind === "pg" ? "포토그래메트리 3D 만들기" : "3D 만들기";
+  try { localStorage.setItem("kind", curKind); } catch (e) {}
+}
+for (const b of document.querySelectorAll(".tabs [role=tab]")) b.onclick = () => setKind(b.dataset.kind);
 
 function setPicked(list) {
   picked = [...list];
@@ -359,7 +391,7 @@ $("go").onclick = async () => {
     const sc = $("scale").value.trim();
     const job = await api("/api/jobs", {method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({name: $("name").value || "현장", local_path: $("lpath").value.trim(),
-        scale: sc ? sc + "\n" : null, mode: document.querySelector("input[name=mode]:checked").value, subject: $("subject").checked, marker_size: parseFloat($("msize").value) || null})});
+        scale: sc ? sc + "\n" : null, mode: document.querySelector("input[name=mode]:checked").value, kind: curKind, subject: curKind === "splat" && $("subject").checked, marker_size: parseFloat($("msize").value) || null})});
     const total = picked.reduce((a, f) => a + f.size, 0) || 1; let sent = 0;
     for (const [i, f] of picked.entries()) {
       $("msg").textContent = `올리는 중 ${i + 1}/${picked.length}: ${f.name}`;
@@ -390,6 +422,7 @@ function card(j) {
   el.innerHTML = `${thumb}
     <div><div class="name"></div>
       <div class="meta"><span class="pill s-${j.status}">${STATUS[j.status] || j.status}</span>
+        <span class="kind ${j.kind === "pg" ? "pg" : ""}">${j.kind === "pg" ? "포토그래메트리" : "스플래팅"}</span>
         ${j.stage && j.status === "running" ? `<span>${j.stage}</span>` : ""}
         ${j.registered ? `<span>사진 <span class="num">${j.registered}</span> 연결</span>` : ""}
         ${j.camera ? `<span title="촬영 기종(사진 EXIF·영상 정보에서 자동 인식)">📷 ${esc(j.camera)}</span>` : ""}
@@ -571,6 +604,7 @@ function placeLive(jobs) {
   }
 }
 wideMQ.addEventListener("change", () => refresh());
+try { setKind(localStorage.getItem("kind") || "splat"); } catch (e) { setKind("splat"); }
 refresh(); setInterval(refresh, 3000);
 
 /* ── CPU·GPU 사용량(2초마다) ── */
@@ -641,6 +675,9 @@ async function openViewer(j) {
   $("fillb").hidden = !j.has_filled; $("estb").hidden = !j.has_est; $("splatb").hidden = !j.has_splat;
   $("ssedit").hidden = !j.has_splat; $("dlspz").hidden = !j.has_splat;
   $("dlspz").href = `/files/${j.id}/site_splat.spz?dl=${encodeURIComponent(j.name + ".spz")}`;
+  $("dlsortho").hidden = !j.has_survey; $("dlsortho").href = `/files/${j.id}/site_ortho.jpg`;
+  $("dldsm").hidden = !j.has_survey; $("dldsm").href = `/files/${j.id}/site_dsm_color.png`;
+  $("dllas").hidden = !j.has_las; $("dllas").href = `/files/${j.id}/site_points.las?dl=${encodeURIComponent(j.name + ".las")}`;
   $("dlortho").hidden = !j.has_ortho; $("dlortho").href = `/files/${j.id}/site_ground_ortho.jpg`;
   $("ssedit").onclick = () => window.open(`/supersplat/?load=${encodeURIComponent(`/files/${j.id}/site_splat.ply`)}&filename=${encodeURIComponent((j.name || "site") + ".ply")}&lng=ko`, "_blank", "noopener");
   $("camsb").hidden = !j.has_cams; camsOn = false; camData = null; $("camsb").classList.remove("on"); $("aphoto").hidden = true;

@@ -424,3 +424,69 @@ def planarize_mesh(mesh_path: Path, points_path: Path, sparse: Path, dst: Path, 
     except Exception as e:
         log(f"  평면 정리 생략({e})")
         return mesh_path
+
+
+def floor_patch(points_path: Path, sparse: Path, img_dir: Path, mesh, out_dir: Path | None = None,
+                max_faces: int = 400_000, log=print):
+    """메쉬에 바닥이 비어 있는 곳(비스듬히 찍혀 측정점이 없는 바닥)을 사진 정사영상을 입힌 평면 조각으로 메운다.
+    반환: (바닥 조각 trimesh | None, 정보). 기존 메쉬가 바닥을 덮고 있는 칸은 건드리지 않는다."""
+    import cv2
+    import pycolmap
+    import trimesh
+    from PIL import Image
+    from scipy.spatial import cKDTree
+    from .fill import read_points
+    xyz = np.asarray(read_points(points_path)[0], np.float64)
+    if len(xyz) < 5000:
+        return None, {}
+    sub = xyz[:: max(1, len(xyz) // 20000)]
+    spacing = float(np.median(cKDTree(xyz).query(sub, k=2)[0][:, 1]))
+    thr = 2 * spacing
+    rec = pycolmap.Reconstruction(sparse)
+    cams = np.array([rec.image(i).projection_center() for i in rec.reg_image_ids()])
+    g = find_ground(xyz, up_vector(rec), cams, thr)
+    if g is None or g["support_cells"] < 30:
+        log("  바닥 조각: 평평한 바닥을 찾지 못함 → 생략")
+        return None, {}
+    o = ground_ortho(g, xyz, sparse, img_dir, thr, max_px=4096, log=log)
+    if o is None:
+        return None, {}
+    if out_dir is not None:
+        cv2.imwrite(str(Path(out_dir) / "site_ground_ortho.jpg"), o["img"][:, :, ::-1], [cv2.IMWRITE_JPEG_QUALITY, 92])
+    n, d, res = o["n"], g["d"], o["res"]
+    H, W = o["mask"].shape
+    # 칸 크기: 면 수 상한 안에서(칸 하나 = 삼각형 2개)
+    step = max(1, int(np.ceil(np.sqrt(2 * o["mask"].sum() / max_faces))))
+    Hs, Ws = H // step, W // step
+    cell_ok = cv2.resize(o["mask"][:Hs * step, :Ws * step].astype(np.uint8), (Ws, Hs), interpolation=cv2.INTER_AREA) > 0
+    # 기존 메쉬가 바닥 근처(±3 thr)에 있는 칸은 제외 → 측정된 바닥은 그대로
+    V = np.asarray(mesh.vertices, np.float64)
+    near = np.abs(V @ n + d) < 3 * thr
+    pv = V[near] - o["origin"]
+    cx = (pv @ o["u"] / (res * step)).astype(int)
+    cy = (pv @ o["v"] / (res * step)).astype(int)
+    k = (cx >= 0) & (cy >= 0) & (cx < Ws) & (cy < Hs)
+    covered = np.zeros((Hs, Ws), np.uint8)
+    covered[cy[k], cx[k]] = 1
+    covered = covered > 0  # 넓히지 않음(넓히면 측정 바닥과 사진 바닥 사이에 틈)
+    use = cell_ok & ~covered
+    if use.sum() < 10:
+        return None, {"cells": 0}
+    yy, xx = np.nonzero(use)
+    # 칸마다 네 꼭짓점(공유 정점)
+    vid = -np.ones((Hs + 1, Ws + 1), np.int64)
+    corners = np.unique(np.concatenate([np.c_[yy, xx], np.c_[yy, xx + 1], np.c_[yy + 1, xx], np.c_[yy + 1, xx + 1]]), axis=0)
+    vid[corners[:, 0], corners[:, 1]] = np.arange(len(corners))
+    P = o["origin"] + np.outer(corners[:, 1] * res * step, o["u"]) + np.outer(corners[:, 0] * res * step, o["v"])
+    P -= n * 0.25 * thr  # 측정 바닥보다 아주 살짝 아래(겹치는 가장자리 깜빡임 방지)
+    a, b, c, e = vid[yy, xx], vid[yy, xx + 1], vid[yy + 1, xx], vid[yy + 1, xx + 1]
+    F = np.concatenate([np.c_[a, c, b], np.c_[b, c, e]])
+    if (np.cross(P[F[0, 1]] - P[F[0, 0]], P[F[0, 2]] - P[F[0, 0]]) @ n) < 0:
+        F = F[:, ::-1]  # 앞면이 위를 보게
+    uv = np.c_[corners[:, 1] * step / W, 1 - corners[:, 0] * step / H]
+    img = Image.fromarray(o["img"])
+    m = trimesh.Trimesh(P, F, visual=trimesh.visual.TextureVisuals(uv=uv, image=img), process=False)
+    info = {"cells": int(use.sum()), "faces": int(len(F)), "m_per_px": round(res, 4),
+            "area_m2": round(float(use.sum()) * (res * step) ** 2, 1)}
+    log(f"  바닥 조각: 사진 바닥 {info['area_m2']} m² 추가(측정이 빈 바닥만, 면 {len(F):,}개)")
+    return m, info

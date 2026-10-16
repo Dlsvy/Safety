@@ -199,9 +199,38 @@ def run(a) -> dict:
 
     rep["dense"] = res.get("stats")
     log("5/5 정리·유니티 내보내기")
+    dense_pts = work / "dense" / "fused.ply" if (work / "dense" / "fused.ply").exists() else res.get("dense_ply")
+    floor = {}
+
+    def add_floor(mesh):
+        """포토그래메트리: 비스듬히 찍혀 측정이 빈 바닥을 사진 정사영상 바닥으로 메움"""
+        if a.pipeline != "pg" or a.subject or not dense_pts:
+            return []
+        from .planes import floor_patch
+        fm, fi = floor_patch(Path(dense_pts), work / "dense" / "sparse", work / "dense" / "images", mesh,
+                             out_dir=out, log=log)
+        floor.update(fi)
+        return [fm] if fm is not None else []
     info = export.export_all(res["textured_obj"], out, cams if not geo["method"].startswith("none") else None,
-                             collider_faces=a.collider_faces, meta={"georef": geo, "sfm": st}, log=log)
+                             collider_faces=a.collider_faces, meta={"georef": geo, "sfm": st},
+                             extra_fn=add_floor, log=log)
+    extra = info.pop("_extra", [])
     rep["model"] = info
+    if floor:
+        rep["floor_patch"] = floor
+    if a.pipeline == "pg":  # 측량형 결과물: 정사영상·DSM·LAS 점군
+        try:
+            from . import survey
+            from .export import _load
+            m = _load(out / "site_model_zup.obj") if not extra else None
+            if m is None:  # 바닥 조각이 붙은 OBJ 는 재료가 둘 → 본 메쉬는 GLB 와 같은 정리본을 다시 읽음
+                m = export.clean_mesh(_load(Path(res["textured_obj"])), cams if not geo["method"].startswith("none") else None,
+                                      log=lambda *_: None)
+            rep["survey"] = {"ortho": survey.ortho_dsm([m] + extra, out, log=log)}
+            if dense_pts:
+                rep["survey"]["points"] = survey.export_points(Path(dense_pts), out, m.bounds, log=log)
+        except Exception as e:
+            log(f"  측량 결과물(정사영상·DSM·점군) 생략: {e}")
     try:  # 촬영 위치(뷰어·유니티에서 '어디서 찍었나' 표시) — GLB 와 같은 Y-up 좌표
         camj = []
         for iid in rec.reg_image_ids():
@@ -347,6 +376,8 @@ def main(argv=None):
                    default=os.environ.get("PHOTO3D_SPLAT_ENGINE", "auto"),
                    help="스플랫 학습 프로그램: auto(Spirula 가 있으면 Spirula, 없으면 Brush)")
     r.add_argument("--splat-res", type=int, default=1920, help="스플래팅 학습 이미지 최대 변 길이(px)")
+    r.add_argument("--pipeline", choices=["splat", "pg"], default="splat",
+                   help="splat: 메쉬 + 가우시안 스플래팅(실사 보기) / pg: 포토그래메트리 전용(측정용 메쉬·정사영상·DSM·점군, 스플랫 없음)")
     r.add_argument("--masks", help="마스크 폴더(<이미지명>.png, 검정=제외) — 움직이는 사람·장비 제거")
     r.add_argument("--gpu", action="store_true", help="CUDA 지원 COLMAP 일 때 GPU 사용")
     r.add_argument("--colmap-bin", default=os.environ.get("COLMAP_BIN"),
@@ -388,6 +419,13 @@ def main(argv=None):
         # RTX 50(SM 12.0)에서 GPU 계산 시작 시 종료(PC 확인) → 메쉬·텍스처만 OpenMVS(CPU판)
         if a.dense == "openmvs" and a.colmap_bin:
             a.dense = "colmap"
+    if a.cmd == "run" and a.pipeline == "pg":
+        # 포토그래메트리: GPU 는 스플랫 대신 조밀복원에 모두 쓴다 → 스플랫 끔, 구멍 메운 모델·평면 정리·측량 결과물 켬
+        a.splat_steps = 0
+        if a.profile == "fast":
+            a.fill = True
+            if a.max_side == 1600:
+                a.max_side = 2400  # 측정용은 빠르게도 해상도를 덜 낮춘다(조밀점·모서리 정확도)
     if a.cmd == "run" and a.splat_steps < 0:
         a.splat_steps = {"fast": 7000, "gpu-max": 30000}.get(a.profile, 0)
     if a.cmd == "run" and not a.inputs and not a.from_colmap:
