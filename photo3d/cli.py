@@ -51,6 +51,13 @@ def run(a) -> dict:
         rec, st = _finish({0: rec}, n_in, log, a.refine_pp, robust=False)  # 우리 BA 로 한 번 더 다듬기
     else:
         log("1/5 입력 정리")
+        if not a.gcp:  # 입력 폴더 안의 측량 기준점 파일 자동 사용(gcp_list.txt)
+            for p_ in a.inputs:
+                for cand in ([Path(p_)] if Path(p_).is_file() else list(Path(p_).rglob("gcp*.txt"))):
+                    if cand.suffix == ".txt" and scale.is_gcp_list(cand):
+                        a.gcp = str(cand)
+                        log(f"  기준점 파일 자동 사용: {cand.name}")
+                        break
         img_dir = work / "images"
         prep = frames.prepare_inputs([Path(p) for p in a.inputs], img_dir, max_side=a.max_side,
                                      video_frames=a.video_frames, log=log)
@@ -192,6 +199,10 @@ def grade(rep: dict) -> dict:
         reason = f"검증 최대오차 {e:.0f}mm"
     else:
         lvl, reason = "B", "독립 검증거리 없음 — check.csv 권장"
+    if g.get("method") == "gps_exif":
+        u = g.get("scale_uncertainty_pct", 99)
+        lvl = "B" if u < 0.3 else "C"
+        reason = f"사진 GPS 로 축척(추정 축척 오차 {u}%) — 정밀 측정은 기준점·마커·줄자 거리 필요"
     if g.get("method") == "marker_scale" and g.get("scale_source") == "marker_edges":
         # 가상현장 검증: 마커 한 변만으로 잡은 축척은 1.8~2.2% 오차(10 m 에 18~22 cm)
         lvl = chr(max(ord(lvl), ord("C")))

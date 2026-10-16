@@ -32,7 +32,7 @@ JOBS.mkdir(parents=True, exist_ok=True)
 STAGES = [("1/5", "입력 정리"), ("2/5", "카메라 위치 계산"), ("3/5", "축척·좌표"),
           ("4/5", "3D 생성"), ("5/5", "유니티 파일")]
 MEDIA = {".jpg", ".jpeg", ".png", ".heic", ".tif", ".tiff", ".webp",
-         ".mp4", ".mov", ".m4v", ".avi", ".mkv"}
+         ".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}
 
 _lock = threading.Lock()
 _queue: "queue.Queue[str]" = queue.Queue()

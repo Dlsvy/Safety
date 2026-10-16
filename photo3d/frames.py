@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 
 IMG_EXT = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".heic", ".webp"}
-VID_EXT = {".mp4", ".mov", ".m4v", ".avi", ".mkv"}
+VID_EXT = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}
 
 
 def sharpness(path: Path, max_side: int = 1024) -> float:
@@ -40,7 +40,30 @@ def _has_marker(path: Path) -> bool:
     return ids is not None
 
 
-def _resize_copy(src: Path, dst: Path, max_side: int) -> None:
+def exif_gps(path: Path):
+    """사진 EXIF 의 GPS(위도, 경도, 고도) — 없으면 None"""
+    try:
+        from PIL import Image
+        ex = Image.open(path).getexif()
+        g = ex.get_ifd(0x8825)
+        if not g or 2 not in g or 4 not in g:
+            return None
+
+        def dms(v):
+            return float(v[0]) + float(v[1]) / 60 + float(v[2]) / 3600
+        lat, lon = dms(g[2]), dms(g[4])
+        if g.get(1) == "S":
+            lat = -lat
+        if g.get(3) == "W":
+            lon = -lon
+        alt = float(g.get(6, 0.0)) * (-1 if g.get(5) == 1 else 1)
+        return [lat, lon, alt]
+    except Exception:
+        return None
+
+
+def _resize_copy(src: Path, dst: Path, max_side: int) -> float:
+    """복사(필요하면 축소)하고 축소 비율을 돌려준다."""
     img = cv2.imread(str(src), cv2.IMREAD_COLOR)
     if img is None:
         raise RuntimeError(f"이미지를 읽을 수 없음: {src}")
@@ -48,10 +71,12 @@ def _resize_copy(src: Path, dst: Path, max_side: int) -> None:
     if max_side and s < 1:
         img = cv2.resize(img, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
         cv2.imwrite(str(dst.with_suffix(".jpg")), img, [cv2.IMWRITE_JPEG_QUALITY, 95])
-    elif src.suffix.lower() in {".jpg", ".jpeg"}:
+        return float(s)
+    if src.suffix.lower() in {".jpg", ".jpeg"}:
         shutil.copy2(src, dst.with_suffix(".jpg"))  # EXIF(초점거리) 보존
     else:
         cv2.imwrite(str(dst.with_suffix(".jpg")), img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    return 1.0
 
 
 def _motion(a: Path, b: Path, side: int = 480) -> float:
@@ -231,6 +256,7 @@ def prepare_inputs(inputs: list[Path], out_dir: Path, max_side: int = 3200,
     images: list[Path] = []
     blurry = []
     pano_n = 0
+    manifest: dict = {}  # 작업용 사진 이름 → 원본 이름·축소 비율·GPS (기준점 픽셀·GPS 정합에 사용)
     if photos:
         scores = {p: sharpness(p) for p in photos}
         med = float(np.median(list(scores.values())))
@@ -246,8 +272,9 @@ def prepare_inputs(inputs: list[Path], out_dir: Path, max_side: int = 3200,
                 images += views
                 pano_n += len(views)
                 continue
-            _resize_copy(p, dst, max_side)
+            sc = _resize_copy(p, dst, max_side)
             images.append(dst.with_suffix(".jpg"))
+            manifest[dst.with_suffix(".jpg").name] = {"src": p.name, "scale": sc, "gps": exif_gps(p)}
         log(f"  사진 {len(photos)}장 중 {len(images)}장 사용"
             + (f" (흔들림 제외: {', '.join(blurry[:5])}{'…' if len(blurry) > 5 else ''})" if blurry else ""))
     for v in videos:
@@ -276,6 +303,11 @@ def prepare_inputs(inputs: list[Path], out_dir: Path, max_side: int = 3200,
         images += frames
     if len(images) < 3:
         raise RuntimeError(f"사용할 수 있는 이미지가 {len(images)}장뿐입니다(최소 3장, 권장 50장 이상)")
+    import json
+    (out_dir.parent / "input_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    n_gps = sum(1 for v in manifest.values() if v.get("gps"))
+    if n_gps:
+        log(f"  GPS 가 있는 사진 {n_gps}장")
     only_pano = pano_n == len(images) and pano_n > 0
     return {"images": images, "sequential": bool(videos) and not photos and not pano_n,
             "skipped_blurry": blurry, "pano_views": pano_n,

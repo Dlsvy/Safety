@@ -204,6 +204,85 @@ def read_checks(path: Path) -> list[tuple[int, int, float]]:
     return out
 
 
+# ── 측지 좌표 → 현장 로컬 미터(ENU) ─────────────────────────────
+_A, _E2 = 6378137.0, 6.69437999014e-3
+
+
+def lla_to_ecef(lat, lon, h):
+    lat, lon = np.radians(lat), np.radians(lon)
+    n = _A / np.sqrt(1 - _E2 * np.sin(lat) ** 2)
+    return np.stack([(n + h) * np.cos(lat) * np.cos(lon), (n + h) * np.cos(lat) * np.sin(lon),
+                     (n * (1 - _E2) + h) * np.sin(lat)], -1)
+
+
+def lla_to_enu(lla: np.ndarray, ref: np.ndarray) -> np.ndarray:
+    """(N,3) 위도·경도·고도 → ref 기준 동·북·위 미터"""
+    e = lla_to_ecef(lla[:, 0], lla[:, 1], lla[:, 2]) - lla_to_ecef(ref[0], ref[1], ref[2])
+    la, lo = np.radians(ref[0]), np.radians(ref[1])
+    R = np.array([[-np.sin(lo), np.cos(lo), 0],
+                  [-np.sin(la) * np.cos(lo), -np.sin(la) * np.sin(lo), np.cos(la)],
+                  [np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo), np.sin(la)]])
+    return e @ R.T
+
+
+def read_gcp_list(path: Path):
+    """OpenDroneMap·WebODM 형식 gcp_list.txt: 첫 줄 좌표계, 이후 'X Y Z 픽셀x 픽셀y 사진이름 [이름]'.
+    반환: (좌표계 문자열, {이름: 좌표(3)}, {이름: [(사진이름, x, y), ...]})"""
+    lines = [ln.strip() for ln in Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+             if ln.strip() and not ln.startswith("#")]
+    proj = lines[0]
+    coords, obs = {}, defaultdict(list)
+    for ln in lines[1:]:
+        t = ln.split()
+        if len(t) < 6:
+            continue
+        name = t[6] if len(t) > 6 else f"{t[0]}_{t[1]}"
+        coords[name] = np.array([float(t[0]), float(t[1]), float(t[2])])
+        obs[name].append((t[5], float(t[3]), float(t[4])))
+    return proj, coords, dict(obs)
+
+
+def is_gcp_list(path: Path) -> bool:
+    try:
+        first = Path(path).read_text(encoding="utf-8", errors="replace").lstrip().splitlines()[0].upper()
+        return first.startswith(("EPSG", "+PROJ", "WGS84"))
+    except Exception:
+        return False
+
+
+def _ray_intersect(C: np.ndarray, D: np.ndarray) -> np.ndarray:
+    """여러 시선(중심 C, 방향 D)의 최소제곱 교점"""
+    A, b = np.zeros((3, 3)), np.zeros(3)
+    for c, d in zip(C, D):
+        P = np.eye(3) - np.outer(d, d)
+        A += P
+        b += P @ c
+    return np.linalg.solve(A, b)
+
+
+def triangulate_gcp_obs(rec, obs: dict, manifest: dict) -> dict:
+    """기준점 픽셀 관측(원본 사진 좌표) → SfM 좌표 3D 점. 사진 2장 이상에 보인 점만."""
+    by_src = {v["src"]: (k, v["scale"]) for k, v in manifest.items()}
+    name2id = {rec.image(i).name: i for i in rec.reg_image_ids()}
+    out = {}
+    for g, lst in obs.items():
+        C, D = [], []
+        for img, x, y in lst:
+            if img not in by_src or by_src[img][0] not in name2id:
+                continue
+            ours, sc = by_src[img]
+            im = rec.image(name2id[ours])
+            cam = rec.cameras[im.camera_id]
+            xy = cam.cam_from_img(np.array([x * sc, y * sc]))
+            Rcw = _pose(im)[:, :3]
+            d = Rcw.T @ np.array([xy[0], xy[1], 1.0])
+            C.append(im.projection_center())
+            D.append(d / np.linalg.norm(d))
+        if len(C) >= 2:
+            out[g] = (_ray_intersect(np.array(C), np.array(D)), len(C))
+    return out
+
+
 def georeference(rec: pycolmap.Reconstruction, image_dir: Path, marker_size: float | None,
                  dict_name: str = "4x4_50", gcp_csv: Path | None = None,
                  check_csv: Path | None = None, markers_on_ground: bool = True,
@@ -223,6 +302,78 @@ def georeference(rec: pycolmap.Reconstruction, image_dir: Path, marker_size: flo
     report["markers_triangulated"] = sorted(markers)
     report["marker_corner_reproj_px"] = float(np.mean(tri_err)) if tri_err else None
 
+    manifest = {}
+    mf = Path(image_dir).parent / "input_manifest.json"
+    if mf.exists():
+        import json
+        manifest = json.loads(mf.read_text(encoding="utf-8"))
+    if gcp_csv and is_gcp_list(gcp_csv):
+        # ── 측량 기준점(사진 픽셀 관측) — Terra·Pix4D 의 GCP 마킹 방식 ──
+        proj, gco, gobs = read_gcp_list(gcp_csv)
+        tri = triangulate_gcp_obs(rec, gobs, manifest)
+        names = sorted(n for n in tri if n in gco)
+        log(f"  기준점 {len(gco)}개 중 사진에서 3D 로 잡힌 것 {len(names)}개 (좌표계 {proj})")
+        if len(names) >= 3:
+            geo = np.array([gco[n] for n in names])
+            if proj.upper().startswith("EPSG:4326") or "LONGLAT" in proj.upper():
+                ref = np.array([geo[:, 1].mean(), geo[:, 0].mean(), geo[:, 2].mean()])
+                dst = lla_to_enu(np.stack([geo[:, 1], geo[:, 0], geo[:, 2]], 1), ref)
+                report["enu_origin_lla"] = ref.tolist()
+                offset = np.zeros(3)
+            else:  # 투영좌표(UTM·TM 등, m)
+                offset = geo.mean(0).round(0)
+                dst = geo - offset
+                report["coordinate_offset"] = offset.tolist()
+            src = np.array([tri[n][0] for n in names])
+            s, R, t = umeyama(src, dst)
+            res = {n: float(np.linalg.norm(s * R @ src[i] + t - dst[i])) for i, n in enumerate(names)}
+            loo = {}
+            if len(names) >= 4:
+                for i, n in enumerate(names):
+                    keep = [j for j in range(len(names)) if j != i]
+                    s2, R2, t2 = umeyama(src[keep], dst[keep])
+                    loo[n] = float(np.linalg.norm(s2 * R2 @ src[i] + t2 - dst[i]))
+            report.update(method="gcp_image", gcp_used=names, gcp_residual_m=res,
+                          gcp_rmse_m=float(np.sqrt(np.mean(np.square(list(res.values()))))),
+                          checkpoint_loo_error_m=loo, gcp_views={n: tri[n][1] for n in names})
+            log(f"  기준점 정합: RMSE {report['gcp_rmse_m'] * 100:.1f}cm"
+                + (f", 검사점(하나씩 빼고) 평균 {np.mean(list(loo.values())) * 100:.1f}cm·최대 {max(loo.values()) * 100:.1f}cm" if loo else ""))
+            sim = pycolmap.Sim3d(float(s), pycolmap.Rotation3d(R), np.asarray(t, float).reshape(3, 1))
+            rec.transform(sim)
+            report["sim3"] = {"scale": float(s), "R": R.tolist(), "t": np.asarray(t).tolist()}
+            return report
+        report["warnings"].append("기준점이 사진 3D 로 3개 이상 잡히지 않아 사용하지 못함")
+        gcp_csv = None
+    gps = {k: v["gps"] for k, v in manifest.items() if v.get("gps")}
+    if not markers and len(gps) >= 3:
+        # ── 사진 GPS 로 축척·방위(Terra 의 POS 정합). 드론 RTK 면 cm, 일반 GPS 는 m 급 ──
+        name2id = {rec.image(i).name: i for i in rec.reg_image_ids()}
+        ks = [k for k in gps if k in name2id]
+        if len(ks) >= 3:
+            lla = np.array([gps[k] for k in ks])
+            ref = lla.mean(0)
+            dst = lla_to_enu(lla, ref)
+            src = np.array([rec.image(name2id[k]).projection_center() for k in ks])
+            spread = float(np.linalg.norm(dst - dst.mean(0), axis=1).max())
+            if spread > 5.0:
+                s, R, t = umeyama(src, dst)
+                r = np.linalg.norm((s * (R @ src.T)).T + t - dst, axis=1)
+                keep = r < max(3 * np.median(r), 0.05)  # 튀는 GPS 제외 후 다시
+                if keep.sum() >= 3 and not keep.all():
+                    s, R, t = umeyama(src[keep], dst[keep])
+                    r = np.linalg.norm((s * (R @ src.T)).T + t - dst, axis=1)
+                rmse = float(np.sqrt(np.mean(r[keep] ** 2)))
+                report.update(method="gps_exif", gps_images=int(len(ks)), gps_fit_rmse_m=rmse,
+                              gps_spread_m=spread, enu_origin_lla=ref.tolist(),
+                              scale_uncertainty_pct=round(100 * rmse / max(spread, 1e-9), 2))
+                report["warnings"].append(
+                    f"축척을 사진 GPS 로 맞춤(맞춤 오차 {rmse:.2f} m, 촬영 범위 {spread:.0f} m → 축척 오차 약 "
+                    f"{report['scale_uncertainty_pct']}%). 정밀 측정은 기준점·마커·줄자 거리 필요")
+                log(f"  사진 GPS {len(ks)}장으로 축척·방위 정합: 맞춤 오차 {rmse:.2f} m, 범위 {spread:.0f} m")
+                sim = pycolmap.Sim3d(float(s), pycolmap.Rotation3d(R), np.asarray(t, float).reshape(3, 1))
+                rec.transform(sim)
+                report["sim3"] = {"scale": float(s), "R": R.tolist(), "t": np.asarray(t).tolist()}
+                return report
     gcp, gcp_checks = read_gcp(gcp_csv) if gcp_csv else ({}, set())
     gcp_common = sorted((set(gcp) - gcp_checks) & set(markers))
     gcp_checkpoints = sorted(gcp_checks & set(markers))
@@ -310,6 +461,16 @@ def georeference(rec: pycolmap.Reconstruction, image_dir: Path, marker_size: flo
             ups.append(-Rcw[1])  # 카메라 -Y 축의 월드 방향
         up = np.mean(ups, 0)
         up /= np.linalg.norm(up)
+        # 촬영 위치들이 거의 한 평면(드론 선회·격자 비행, 같은 높이로 걷기)이면 그 평면의 법선이 '위'.
+        # 드론처럼 아래를 내려다보며 찍으면 카메라 '위' 평균은 기울어져 있어 이것이 더 정확하다.
+        Cs = np.array([rec.image(i).projection_center() for i in rec.reg_image_ids()])
+        if len(Cs) >= 8:
+            w_, v_ = np.linalg.eigh(np.cov((Cs - Cs.mean(0)).T))
+            if w_[0] < 0.05 * w_[2] and w_[1] > 0.05 * w_[2]:
+                n = v_[:, 0]
+                up = n if np.dot(n, up) > 0 else -n
+                report["level_source"] = "camera_plane"
+                log("  수평: 촬영 위치들이 이루는 평면 기준")
         x = np.cross([0.0, 1.0, 0.0], up) if abs(up[1]) < 0.9 else np.cross([1.0, 0.0, 0.0], up)
         x /= np.linalg.norm(x)
         R = np.stack([x, np.cross(up, x), up])
