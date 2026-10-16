@@ -49,6 +49,15 @@ def run(a) -> dict:
         cap = plan["splats"] if a.profile == "gpu-max" else max(500_000, plan["splats"] // 2)
         plan["splats"] = cap
         os.environ["PHOTO3D_MAX_SPLATS"] = str(cap)
+        # Spirula 는 압축 학습이라 같은 VRAM 에 더 많이(README: 8GB 에 1,000만). 최고 품질은 Spirula 의
+        # quality=high/ultra 기준(300만·5만 스텝 / 1,000만·8만 스텝)으로 더 잘게 쪼개 세밀하게
+        if a.profile == "gpu-max":
+            sp_cap, sp_steps = (10_000_000, 80_000) if plan["vram_gb"] >= 11 else (5_000_000, 50_000)
+            os.environ["PHOTO3D_SPIRULA_CAP"] = str(sp_cap)
+            os.environ["PHOTO3D_SPIRULA_STEPS"] = str(sp_steps)
+            os.environ["PHOTO3D_SPIRULA_RES"] = "3200"
+        else:
+            os.environ["PHOTO3D_SPIRULA_CAP"] = str(max(1_000_000, cap))
         os.environ["PHOTO3D_MOGE"] = plan["moge"]
         os.environ["PHOTO3D_MOGE_SIDE"] = str(plan["moge_side"])
         if a.splat_res == 1920:
@@ -133,7 +142,8 @@ def run(a) -> dict:
                 sp_exe = splat.find_spirula(root, log=log) if a.splat_engine in ("auto", "spirula") else None
                 if sp_exe:
                     side["splat"] = splat.start_splat_spirula(dense_dir, sp_exe, steps=a.splat_steps,
-                                                              max_res=a.splat_res, log=log, subject=a.subject)
+                                                              max_res=a.splat_res, log=log, subject=a.subject,
+                                                              depth_sup=a.profile == "gpu-max")
                     eng = "Spirula"
                 else:
                     brush = splat.find_brush(root, log=log)
@@ -149,7 +159,8 @@ def run(a) -> dict:
                 log(f"  스플래팅 시작 실패(메쉬 결과는 정상): {e}")
 
     res = mvs.densify_and_mesh(rec, img_dir, work, quality=a.quality, engine=a.dense,
-                               colmap_bin=a.colmap_bin, on_dense_ready=on_dense_ready, prior=a.prior, log=log)
+                               colmap_bin=a.colmap_bin, on_dense_ready=on_dense_ready, prior=a.prior,
+                               subject=a.subject, log=log)
     if a.fill and "fill" not in side and res.get("dense_ply"):  # CPU(OpenMVS) 경로: 콜백 없음 → 지금 시작
         on_dense_ready(work / "dense", res["dense_ply"])
 

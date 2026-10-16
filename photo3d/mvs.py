@@ -120,6 +120,49 @@ def prune_mesh(mesh_path: Path, points_path: Path, dst: Path, log=print) -> Path
         return mesh_path
 
 
+def subject_masks(dense: Path, log=print) -> Path | None:
+    """dense/images 의 사진마다 주인공 마스크(BiRefNet). COLMAP 이름 규칙(<사진 이름>.png)과
+    Spirula·Brush 규칙(<확장자 뺀 이름>.png)을 둘 다 쓴다. 실패하면 None(마스크 없이 진행)."""
+    try:
+        from . import splat
+        exe = splat.find_spirula(Path(__file__).resolve().parents[1], log=log)
+        if not exe:
+            log("  배경 분리 생략: Spirula 없음")
+            return None
+        log("  사람·물체 모드: 사진마다 배경 자동 분리(BiRefNet)")
+        tmpd = dense / "_subject"
+        shutil.rmtree(tmpd, ignore_errors=True)
+        (tmpd / "images").mkdir(parents=True)
+        for q in (dense / "images").iterdir():  # make_subject_masks 는 <폴더>/images 를 읽는다
+            try:
+                os.link(q, tmpd / "images" / q.name)
+            except OSError:
+                shutil.copy2(q, tmpd / "images" / q.name)
+
+        class _L:
+            def write(self, m):
+                if "완료" in m:
+                    log("  " + m.strip())
+
+            def flush(self):
+                pass
+        n = splat.make_subject_masks(exe, tmpd, _L())
+        if not n:
+            return None
+        mdir = dense / "masks"
+        shutil.rmtree(mdir, ignore_errors=True)
+        mdir.mkdir()
+        names = {q.stem: q.name for q in (dense / "images").iterdir()}
+        for m in (tmpd / "masks").iterdir():
+            shutil.copy2(m, mdir / f"{names.get(m.stem, m.stem)}.png")
+        shutil.copytree(tmpd / "masks", dense / "masks_stem", dirs_exist_ok=True)
+        shutil.rmtree(tmpd, ignore_errors=True)
+        return mdir
+    except Exception as e:
+        log(f"  배경 분리 실패(마스크 없이 진행): {e}")
+        return None
+
+
 def add_prior_points(fused: Path, dense: Path, log=print) -> int:
     """조밀 점군(fused.ply)에 깊이 prior 로 채운 점을 더해 같은 파일로 저장. 실패해도 원래 점군 유지."""
     try:
@@ -152,7 +195,7 @@ def add_prior_points(fused: Path, dense: Path, log=print) -> int:
 def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
                      quality: str = "medium", threads: int = 0, engine: str = "openmvs",
                      colmap_bin: str | None = None, on_dense_ready=None, prior: bool = True,
-                     log=print) -> dict:
+                     subject: bool = False, log=print) -> dict:
     q = QUALITY[quality]
     sparse = work / "sparse_georef"
     if sparse.exists():
@@ -209,7 +252,13 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
                 log(f"  조밀복원 {size}px 실패 → {ladder[k + 1]}px 로 다시 ({str(e).splitlines()[-1].strip()[:120]})")
         log(f"  조밀복원 해상도 {size}px")
         fused = dense / "fused_raw.ply"
-        _run([colmap_bin, "stereo_fusion", "--workspace_path", str(dense), "--workspace_format", "COLMAP",
+        mask_args = []
+        if subject:  # 사람·물체 모드: 배경 분리 마스크 안쪽만 합쳐 대상만 메쉬로(배경 덩어리·번짐 방지)
+            mdir = subject_masks(dense, log)
+            if mdir:
+                mask_args = ["--StereoFusion.mask_path", str(mdir)]
+                prior = False  # 흰 벽 채우기는 배경용이라 끔
+        _run([colmap_bin, "stereo_fusion", "--workspace_path", str(dense), "--workspace_format", "COLMAP", *mask_args,
               "--input_type", "geometric", "--StereoFusion.max_image_size", str(size),
               "--StereoFusion.cache_size", cache,
               "--StereoFusion.min_num_pixels", "4", "--StereoFusion.max_reproj_error", "1.5",

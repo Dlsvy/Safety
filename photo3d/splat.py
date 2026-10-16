@@ -162,7 +162,7 @@ def subject_points(dense: Path, masks: Path, min_ratio: float = 0.6) -> np.ndarr
 
 
 def start_splat_spirula(dense: Path, exe: str, steps: int = 30000, max_res: int = 1920, log=print,
-                        subject: bool = False) -> dict:
+                        subject: bool = False, depth_sup: bool = False) -> dict:
     """Spirula 학습을 백그라운드로: ① 표면 방향 지도(MoGe-2, MIT) ② 학습(노출 보정·잡티 억제·조밀 점 시작)."""
     import math
     work = dense.parent / "splat"
@@ -184,20 +184,27 @@ def start_splat_spirula(dense: Path, exe: str, steps: int = 30000, max_res: int 
         longest = max(max(c.width, c.height) for c in r.cameras.values())
     except Exception:
         pass
+    steps = int(os.environ.get("PHOTO3D_SPIRULA_STEPS", steps))
+    max_res = int(os.environ.get("PHOTO3D_SPIRULA_RES", max_res))
     div = max(1, math.ceil(longest / max_res)) if longest else 1
-    cap = os.environ.get("PHOTO3D_MAX_SPLATS", "3000000")
+    cap = os.environ.get("PHOTO3D_SPIRULA_CAP") or os.environ.get("PHOTO3D_MAX_SPLATS", "3000000")
     runs = work / "runs"
-    geo = [exe, "geometry", str(data), "--max-size", "1064", "--normal-format", "jpg"]
+    geo = [exe, "geometry", str(data), "--max-size", "1064", "--normal-format", "jpg"] + (["--depth"] if depth_sup else [])
     train = [exe, "train", "centered-object" if subject else "3dgs", "--data", str(data), "--num-iterations", str(steps), "--disable-viewer", "1",
              "--scene-center", "none", "--seed-pointcloud", "init.ply", "--cap-max", cap,
              "--floater-suppression", "mild", "--train-resolution-divisor", str(div),
-             "--output-dir-prefix", str(runs), "--output-dir-name", "run"]
+             "--output-dir-prefix", str(runs), "--output-dir-name", "run"] \
+        + (["--depth-supervision-weight", "0.05"] if depth_sup else [])  # 최고 품질: 깊이도 지도(흰 벽 평평하게)
     log(f"  $ spirula train --total-steps {steps} (표면 방향 지도 → 학습, 해상도 1/{div}, 최대 {int(cap):,}개, 백그라운드 GPU)")
     logf = open(work / "brush.log", "w", encoding="utf-8", errors="replace")  # 진행 표시가 같은 파일을 읽음
     steps_ = [geo, train]
     if subject:  # 사람·물체 모드: 배경 분리 마스크 → 대상만 학습(centered-object), 배경은 빈 공간으로
-        log("  사람·물체 모드: 사진마다 배경 자동 분리(BiRefNet) 후 대상만 학습")
-        steps_ = [lambda: make_subject_masks(exe, data, logf), geo, train]
+        if (dense / "masks_stem").exists():  # 조밀복원 단계에서 이미 만든 마스크 재사용
+            shutil.copytree(dense / "masks_stem", data / "masks")
+            log("  사람·물체 모드: 배경 분리 마스크 재사용, 대상만 학습")
+        else:
+            log("  사람·물체 모드: 사진마다 배경 자동 분리(BiRefNet) 후 대상만 학습")
+            steps_ = [lambda: make_subject_masks(exe, data, logf), geo, train]
     proc = _Chain(steps_, work, logf)
     return {"proc": proc, "logf": logf, "work": work, "exp": runs, "steps": steps, "engine": "spirula",
             "subject": subject, "data": data}
