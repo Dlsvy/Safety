@@ -32,6 +32,18 @@ README.md 에 전체 설명·검증 결과가 있다. 먼저 README 를 읽어�
 - 스플래팅은 `scripts/gpu/train_splat.py` (8 GB 에서 30k 스텝 가능 예상, 부족하면 `--steps 15000`).
 - 클라우드에선 GPU 가 없어 이 경로를 한 번도 실행하지 못했다 — 첫 실행에서 오류 나면 고쳐서 커밋할 것.
 
+## 포토그래메트리 탭 (2026-10-16, `--pipeline pg`)
+- 화면 맨 위 탭 '가우시안 스플래팅 | 포토그래메트리'. 포토그래메트리는 스플랫 없이 측정용 3D 전용.
+- 처리: 강건 SfM(DEGENSAC) → 드론·100장↑+GPS 는 GPS 가까운 사진끼리만 매칭(`sfm.gps_pairs`) → 조밀복원 →
+  메쉬 **엄격 정리**(측정점에서 점 간격 3배 넘는 면 제거) → 평면·모서리 정리 → 측정이 빈 평평한 바닥만 사진 정사영상 바닥 조각
+  (항공·경사지는 생략) → 내보내기 + `survey.py`: `site_ortho.jpg/.png(+.jgw/.pgw)`, `site_dsm.tif(+.tfw)`, `site_dsm_color.png`,
+  `site_points.las`(LAS 1.2), `site_ortho.json`. 지붕·천장 아래 현장은 카메라 높이 위를 잘라 평면도처럼.
+- 검증(클라우드 CPU, OpenMVS draft — PC 의 GPU PatchMatch 보다 낮은 해상도):
+  - ETH3D delivery_area(야외 산업현장, 레이저 정답): 엄격 정리로 5cm F1 58→71%, 중앙 오차 62→26mm. 등록 44/44, 0.38px.
+  - ETH3D office: 5cm 안 비율 75.7→90.8%, 중앙 오차 19.9→9.4mm, F1 유지(64.9→66.1).
+  - ODM Aukerman(드론 77장, GPS): 등록 77/77, 0.83px, GPS 축척 맞춤 오차 1.44m(일반 GPS), 정사영상 8cm/px.
+- PC 에서 확인할 것: COLMAP 4.2.1 `--TwoViewGeometry.use_degensac 1`·`matches_importer` 실제 동작, pg 모드 처리 시간.
+
 ## 지켜야 할 것
 - 상업 이용 가능 라이선스만(비상업: MASt3R, π³ 가중치, MILo, 2DGS, PGSR, VGGT 기본 가중치 등 사용 금지 — docs/GPU_PC.md).
 - 새 기법은 실사 벤치마크(eval_strecha.py)로 숫자 확인 후 채택(클라우드에서 sift_hq·refine_pp 는 효과 없어 옵션으로만 둠).
