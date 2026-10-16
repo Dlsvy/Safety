@@ -47,7 +47,14 @@ def _run(args: list[str], cwd: Path, log, logfile: Path):
         f.flush()
         r = subprocess.run(args, cwd=cwd, stdout=f, stderr=subprocess.STDOUT)
     if r.returncode != 0:
-        raise RuntimeError(f"{Path(args[0]).name} 실패 (로그: {logfile})")
+        # 외부 프로그램 로그의 마지막 줄들을 오류에 붙여 화면에서 바로 원인을 보게 한다
+        try:
+            txt = Path(logfile).read_text(encoding="utf-8", errors="replace").replace("\r", "\n")
+            tail = [ln.strip() for ln in txt.splitlines() if ln.strip() and "Estimated depth-maps" not in ln][-6:]
+        except OSError:
+            tail = []
+        raise RuntimeError(f"{Path(args[0]).name} 실패 (종료코드 {r.returncode}, 로그: {logfile})\n"
+                           + "\n".join("    " + t[:300] for t in tail))
 
 
 def _color_from_points(mesh_path: Path, points_path: Path, mvs: Path, log, smooth: int = 8) -> Path:

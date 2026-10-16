@@ -231,9 +231,38 @@ def run_job(jid: str) -> None:
     ok = r.returncode == 0 and (d / "out" / "site_model.glb").exists()
     job.update(status="done" if ok else "failed", finished=time.time())
     if not ok:
-        tail = (d / "console.log").read_text(encoding="utf-8", errors="replace").splitlines()[-12:]
-        job["error"] = "\n".join(tail)
+        lines = (d / "console.log").read_text(encoding="utf-8", errors="replace").splitlines()
+        job["error"] = explain_error(lines)
     save_job(job)
+
+
+_HINTS = [
+    ("out of memory", "GPU 메모리 부족 — 품질을 한 단계 낮추거나 사진 수를 줄여 다시 처리하세요"),
+    ("cudaerror", "GPU(CUDA) 오류 — 그래픽 드라이버를 최신으로 업데이트한 뒤 PC 재시작"),
+    ("no cuda", "CUDA 를 쓸 수 있는 GPU 를 찾지 못함 — 그래픽 드라이버 확인"),
+    ("등록", "사진끼리 연결이 부족 — 겹치게(70~80%) 더 찍거나 무늬 있는 곳을 함께 찍으세요"),
+    ("no space", "디스크 공간 부족 — C 드라이브 여유 공간을 20GB 이상 확보하세요"),
+    ("memoryerror", "PC 메모리 부족 — 다른 프로그램을 닫고 다시 처리하세요"),
+    ("permission", "파일 접근 권한 오류 — 결과 폴더가 다른 프로그램에서 열려 있지 않은지 확인"),
+]
+
+
+def explain_error(lines: list[str]) -> str:
+    """실패 원인을 맨 위에 — 파이썬 호출 경로(Traceback)는 뒤로 보낸다"""
+    tb = next((i for i, ln in enumerate(lines) if ln.startswith("Traceback")), None)
+    if tb is None:
+        return "\n".join(lines[-12:])
+    body = lines[tb + 1:]
+    k = next((i for i, ln in enumerate(body) if not ln.startswith(" ")), len(body))
+    cause = body[k:] or body[-1:]
+    progress = [ln for ln in lines[:tb] if ln.startswith("[")][-3:]
+    low = " ".join(cause + lines[-40:]).lower()
+    hint = next((h for key, h in _HINTS if key in low), "")
+    out = ["원인: " + (cause[0] if cause else "알 수 없음")] + cause[1:]
+    if hint:
+        out += ["조치: " + hint]
+    out += ["", "마지막 진행 단계:"] + progress + ["", "(자세한 기록: 결과 폴더의 console.log)"]
+    return "\n".join(out)
 
 
 # ── HTTP ──────────────────────────────────────────────
