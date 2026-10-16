@@ -49,8 +49,13 @@ def _run(args: list[str], cwd: Path, log, logfile: Path):
         raise RuntimeError(f"{Path(args[0]).name} 실패 (로그: {logfile})")
 
 
-def _color_from_points(mesh_path: Path, points_path: Path, mvs: Path, log) -> Path:
-    """메쉬 정점마다 가장 가까운 조밀 점의 색을 입힌다(텍스처 실패 시 최후 대체)."""
+def _color_from_points(mesh_path: Path, points_path: Path, mvs: Path, log, smooth: int = 8) -> Path:
+    """메쉬 정점마다 주변 조밀 점들의 색을 입힌다(텍스처 실패 시 대체).
+
+    정점 색은 정점 간격보다 세밀할 수 없어 각져 보인다 → ① Taubin 스무딩(부피·치수 보존형)으로
+    Poisson 표면의 울퉁불퉁함을 줄이고 ② 한 번 세분해 색 해상도를 4배로 ③ 가장 가까운 1점 대신
+    가까운 4점만 좁게 거리 가중해 얼룩은 줄이되 선명함은 유지한다.
+    """
     import numpy as np
     import trimesh
     from scipy.spatial import cKDTree
@@ -60,11 +65,22 @@ def _color_from_points(mesh_path: Path, points_path: Path, mvs: Path, log) -> Pa
         cols = getattr(pc, "colors", None)
         if cols is None or len(cols) == 0:
             cols = pc.visual.vertex_colors
-        _, idx = cKDTree(np.asarray(pc.vertices)).query(m.vertices, workers=-1)
-        m.visual = trimesh.visual.ColorVisuals(m, vertex_colors=np.asarray(cols)[idx])
+        cols = np.asarray(cols)[:, :3].astype(np.float32)
+        if smooth:
+            m.merge_vertices()
+            trimesh.smoothing.filter_taubin(m, lamb=0.5, nu=0.53, iterations=smooth)
+        if len(m.faces) < 3_000_000:  # 메모리 한도 내에서 색 해상도 ×4
+            v, f = trimesh.remesh.subdivide(m.vertices, m.faces)
+            m = trimesh.Trimesh(v, f, process=False)
+        d, idx = cKDTree(np.asarray(pc.vertices)).query(m.vertices, k=4, workers=-1)
+        w = 1.0 / np.maximum(d, 1e-9)
+        w[d > 2 * d[:, :1] + 1e-9] = 0  # 너무 먼 점(다른 면)은 제외
+        c = (cols[idx] * w[..., None]).sum(1) / w.sum(1, keepdims=True)
+        rgba = np.concatenate([np.clip(c, 0, 255), np.full((len(c), 1), 255)], 1).astype(np.uint8)
+        m.visual = trimesh.visual.ColorVisuals(m, vertex_colors=rgba)
         out = mvs / "scene_mesh_colored.ply"
         m.export(out)
-        log(f"  점군 색 입힘: {len(m.vertices):,}정점")
+        log(f"  점군 색 입힘(스무딩 {smooth}회·세분·4점): {len(m.vertices):,}정점")
         return out
     except Exception as e:
         log(f"  점군 색 입히기 실패({e}) → 색 없는 메쉬 사용")

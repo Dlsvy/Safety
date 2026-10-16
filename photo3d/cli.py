@@ -83,16 +83,21 @@ def run(a) -> dict:
     rep["model"] = info
     if a.fill and res.get("dense_ply"):
         from . import fill
-        log("  빈 곳 메우기(Poisson) — 메운 부분은 '추정 영역'으로 분리")
-        fr = fill.fill_holes(res["dense_ply"], out, cams if not geo["method"].startswith("none") else None, log=log)
-        m, est = fr["mesh"], fr["estimated_mask"]
-        est_mesh = m.submesh([np.where(est)[0]], append=True) if est.any() else None
-        if est_mesh is not None:
-            est_mesh.apply_transform(export.ZUP_TO_YUP)
-            est_mesh.export(out / "site_estimated.glb")
-        rep["fill"] = {"estimated_area_ratio": fr["estimated_area_ratio"],
-                       "file": "site_estimated.glb" if est_mesh is not None else None,
-                       "note": "추정 영역은 측정값이 아님 — 높은 위치/드론 사진 추가 또는 도면 3D 결합으로 대체 권장"}
+        log("  구멍 메우기(주변 형상 Poisson) — 메운 부분은 '추정 영역'으로 따로 표시")
+        try:
+            fr = fill.fill_holes(res["dense_ply"], out, cams if not geo["method"].startswith("none") else None,
+                                 log=log)
+            m, est = fr["mesh"], fr["estimated_mask"]
+            m.apply_transform(export.ZUP_TO_YUP)
+            m.export(out / "site_filled.glb")  # 보기용: 구멍 없이 이어진 전체(색 포함)
+            est_mesh = m.submesh([np.where(est)[0]], append=True) if est.any() else None
+            if est_mesh is not None:
+                est_mesh.export(out / "site_estimated.glb")  # 유니티: SiteEstimated 레이어로 경고
+            rep["fill"] = {"estimated_area_ratio": fr["estimated_area_ratio"], "filled": "site_filled.glb",
+                           "file": "site_estimated.glb" if est_mesh is not None else None,
+                           "note": "추정 영역은 측정값이 아님 — 높은 위치/드론 사진 추가 또는 도면 3D 결합으로 대체 권장"}
+        except Exception as e:
+            log(f"  구멍 메우기 실패: {e}")
     rep["elapsed_min"] = round((time.time() - t0) / 60, 1)
     rep["grade"] = grade(rep)
     with open(out / "report.json", "w", encoding="utf-8") as f:
@@ -172,8 +177,9 @@ def main(argv=None):
     r.add_argument("--dense", choices=["openmvs", "colmap"], default="openmvs",
                    help="조밀복원 엔진: openmvs(CPU 가능) / colmap(PatchMatch, CUDA GPU 필요)")
     r.add_argument("--max-features", type=int, default=12000)
-    r.add_argument("--fill", action="store_true",
-                   help="빈 곳을 Poisson 으로 메워 site_estimated.glb(추정 영역) 생성 — 측정값 아님")
+    r.add_argument("--no-fill", dest="fill", action="store_false",
+                   help="구멍 메우기 끄기(기본: 주변 형상으로 메운 site_filled.glb + 추정 영역 site_estimated.glb 생성)")
+    r.add_argument("--fill", action="store_true", default=True, help=argparse.SUPPRESS)
     r.add_argument("--masks", help="마스크 폴더(<이미지명>.png, 검정=제외) — 움직이는 사람·장비 제거")
     r.add_argument("--gpu", action="store_true", help="CUDA 지원 COLMAP 일 때 GPU 사용")
     r.add_argument("--colmap-bin", default=os.environ.get("COLMAP_BIN"),

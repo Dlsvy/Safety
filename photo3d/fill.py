@@ -69,10 +69,75 @@ def _write_ply(path: Path, xyz, nrm, rgb):
         f.write(rec.tobytes())
 
 
-def fill_holes(dense_ply: Path, out: Path, cam_centers: np.ndarray | None, depth: int = 11,
-               est_dist: float = 0.10, crop_margin: float = 1.5, log=print) -> dict:
-    xyz, nrm, rgb = read_openmvs_ply(dense_ply)
-    log(f"  조밀 점군 {len(xyz):,}점 → Poisson(depth={depth})")
+def read_points(path: Path):
+    """조밀 점군(xyz·법선·색). COLMAP fused.ply 는 trimesh 로, OpenMVS(가변 리스트 포함)는 직접 읽는다."""
+    with open(path, "rb") as f:
+        head = f.read(2048)
+    if b"property list" not in head.split(b"end_header")[0]:
+        pc = trimesh.load(path, process=False)
+        xyz = np.asarray(pc.vertices, float)
+        el = pc.metadata.get("_ply_raw", {}).get("vertex", {}).get("data")
+        nrm = np.stack([el[k] for k in ("nx", "ny", "nz")], 1).astype(float) \
+            if el is not None and "nx" in el.dtype.names else None
+        cols = getattr(pc, "colors", None)
+        rgb = np.asarray(cols)[:, :3].astype(np.uint8) if cols is not None and len(cols) else None
+        return xyz, nrm, rgb
+    return read_openmvs_ply(path)
+
+
+def _paint_unmeasured(m: trimesh.Trimesh, c: np.ndarray, measured: np.ndarray, pool: int = 48,
+                      seed: int = 0) -> np.ndarray:
+    """메운 곳을 주변의 '실제 색'으로 칠한다(평균·혼합·늘어짐 없음).
+
+    표면을 따라(측지 거리) 가장 가까운 측정 정점을 찾고, 그 주변 측정 정점 pool 개 중 하나의 색을 그대로 복사한다.
+    → 색은 섞이지 않고(실제 관측색만 사용), 경계색 하나가 길게 늘어나지도 않으며, 벽은 벽색·바닥은 바닥색을 따른다.
+    """
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import dijkstra
+    est = ~measured
+    if not est.any() or not measured.any():
+        return c
+    e = m.edges_unique
+    L = m.edges_unique_length
+    n = len(m.vertices)
+    g = coo_matrix((np.r_[L, L], (np.r_[e[:, 0], e[:, 1]], np.r_[e[:, 1], e[:, 0]])), shape=(n, n)).tocsr()
+    src_ids = np.where(measured)[0]
+    # 경계 근처 측정 정점만 출발점으로(전부 넣으면 느림) — 미측정 정점과 한 변으로 이어진 측정 정점
+    nb = est[e[:, 0]] != est[e[:, 1]]
+    border = np.unique(np.where(measured[e[nb, 0]], e[nb, 0], e[nb, 1]))
+    if len(border) == 0:
+        border = src_ids
+    _, _, src = dijkstra(g, indices=border, min_only=True, return_predecessors=True)
+    out = c.copy()
+    ev = np.where(est & (src >= 0))[0]
+    if len(ev) == 0:
+        return out
+    mt = cKDTree(m.vertices[src_ids])
+    _, cand = mt.query(m.vertices[src[ev]], k=min(pool, len(src_ids)), workers=-1)
+    pick = np.random.default_rng(seed).integers(0, cand.shape[1], len(ev))
+    out[ev] = c[src_ids[cand[np.arange(len(ev)), pick]]]
+    return out
+
+
+def fill_holes(dense_ply: Path, out: Path, cam_centers: np.ndarray | None, depth: int = 10,
+               est_dist: float | None = None, max_gap: float | None = None, smooth: int = 8,
+               max_faces: int = 1_200_000, log=print) -> dict:
+    """주변 형상을 따라 구멍을 메운 '연속 메쉬'를 만든다.
+
+    - Poisson(trim 없음)은 점군 전체를 매끈한 하나의 면으로 이어 붙이므로 구멍이 주변 곡면을 따라 닫힌다.
+    - 측정점에서 max_gap 보다 먼 면(데이터가 전혀 없는 허공의 부풀림)은 지운다 → 근거 있는 구멍만 메움.
+    - 메운 면에도 가까운 측정점들의 색을 거리 가중으로 입혀 사진처럼 보이게 한다.
+    - 측정점에서 est_dist 보다 먼 면 = '추정 영역'(측정 아님) → 따로 표시·내보내기.
+    """
+    xyz, nrm, rgb = read_points(dense_ply)
+    if nrm is None:
+        raise RuntimeError("점군에 법선이 없어 메우기를 할 수 없습니다")
+    diag = float(np.linalg.norm(np.percentile(xyz, 98, 0) - np.percentile(xyz, 2, 0)))
+    tree = cKDTree(xyz)
+    spacing = float(np.median(tree.query(xyz[:: max(1, len(xyz) // 20000)], k=2)[0][:, 1]))
+    est_dist = est_dist or max(8 * spacing, 0.005 * diag)
+    max_gap = max_gap or 0.05 * diag
+    log(f"  조밀 점군 {len(xyz):,}점 → Poisson(depth={depth}) · 메울 최대 간격 {max_gap:.2f} · 추정 판정 {est_dist:.3f}")
     clean = out / "_poisson_in.ply"
     _write_ply(clean, xyz, nrm, rgb)
     raw = out / "_poisson_raw.ply"
@@ -80,27 +145,44 @@ def fill_holes(dense_ply: Path, out: Path, cam_centers: np.ndarray | None, depth
     opt.depth = depth
     opt.trim = 0  # 잘라내지 않음 = 닫힌 면(구멍 메움)
     pycolmap.poisson_meshing(clean, raw, opt)
-    m = trimesh.load(raw, process=False)
-    # 촬영 범위 밖 / 지면 아래 부풀림 제거
-    keep = np.ones(len(m.faces), bool)
-    fc = m.triangles_center
-    if cam_centers is not None and len(cam_centers) >= 3:
-        c = cam_centers.mean(0)
-        r = np.linalg.norm((cam_centers - c)[:, :2], axis=1).max() * crop_margin + 2.0
-        keep &= np.linalg.norm((fc - c)[:, :2], axis=1) <= r
-    ground = np.percentile(xyz[:, 2], 2)
-    keep &= fc[:, 2] >= ground - 0.3
-    m.update_faces(keep)
-    m.remove_unreferenced_vertices()
-    # 측정점과의 거리로 추정 영역 판정
-    d, _ = cKDTree(xyz).query(m.triangles_center, workers=-1)
-    est = d > est_dist
-    area = m.area_faces
-    frac = float(area[est].sum() / max(area.sum(), 1e-9))
-    colors = np.tile(np.array([170, 170, 170, 255], np.uint8), (len(m.faces), 1))
-    colors[est] = [255, 120, 0, 255]  # 주황 = 추정(측정 아님)
-    m.visual = trimesh.visual.ColorVisuals(m, face_colors=colors)
+    m = trimesh.load(raw, process=False, force="mesh")
     clean.unlink(missing_ok=True)
     raw.unlink(missing_ok=True)
-    log(f"  닫힌 메쉬 {len(m.faces):,}면, 추정 영역 {frac:.1%} (측정점에서 {est_dist*100:.0f}cm 초과)")
+    d, _ = tree.query(m.triangles_center, workers=-1)
+    keep = d <= max_gap
+    if cam_centers is not None and len(cam_centers) >= 3:  # 축척 확정 시: 지면 아래 부풀림 제거
+        keep &= m.triangles_center[:, 2] >= np.percentile(xyz[:, 2], 2) - 0.3
+    m.update_faces(keep)
+    m.remove_unreferenced_vertices()
+    # 측정 영역과 이어지지 않은 떠다니는 조각 제거
+    parts = m.split(only_watertight=False)
+    if len(parts) > 1:
+        big = max(p.area for p in parts)
+        m = trimesh.util.concatenate([p for p in parts if p.area >= 0.02 * big])
+    if smooth:
+        trimesh.smoothing.filter_taubin(m, lamb=0.5, nu=0.53, iterations=smooth)
+    if len(m.faces) > max_faces:
+        from .export import decimate
+        m = decimate(m, max_faces)
+        # 단순화가 가끔 만드는 '바늘'(길고 아주 가는 삼각형)만 제거 — 평평한 곳의 큰 삼각형은 둔다
+        el = np.linalg.norm(m.vertices[m.faces] - m.vertices[np.roll(m.faces, 1, 1)], axis=2).max(1)
+        thin = el ** 2 / np.maximum(2 * m.area_faces, 1e-12)  # 최장변 / 그 변에 대한 높이
+        m.update_faces(~((thin > 25) & (el > 4 * np.median(el))))
+        m.remove_unreferenced_vertices()
+    dv, idx = tree.query(m.vertices, k=4, workers=-1)
+    measured = dv[:, 0] <= est_dist
+    if rgb is not None:
+        # 측정된 곳: 가까운 4점만 좁게 섞어 선명하게
+        w = 1.0 / np.maximum(dv, 1e-9)
+        w[dv > 2 * dv[:, :1] + 1e-9] = 0
+        c = (rgb[idx].astype(np.float32) * w[..., None]).sum(1) / w.sum(1, keepdims=True)
+        c = _paint_unmeasured(m, c, measured)
+    else:
+        c = np.full((len(m.vertices), 3), 170.0)
+    m.visual = trimesh.visual.ColorVisuals(
+        m, vertex_colors=np.concatenate([np.clip(c, 0, 255), np.full((len(c), 1), 255)], 1).astype(np.uint8))
+    est = dv[:, 0][m.faces].min(1) > est_dist  # 세 꼭짓점 모두 측정점에서 먼 면
+    area = m.area_faces
+    frac = float(area[est].sum() / max(area.sum(), 1e-9))
+    log(f"  메운 메쉬 {len(m.faces):,}면, 추정 영역 {frac:.1%}")
     return {"mesh": m, "estimated_mask": est, "estimated_area_ratio": round(frac, 4)}
