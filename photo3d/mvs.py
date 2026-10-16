@@ -95,6 +95,27 @@ def _color_from_points(mesh_path: Path, points_path: Path, mvs: Path, log, smoot
         return mesh_path
 
 
+def _fix_topology(m, min_faces: int = 50, rounds: int = 5) -> None:
+    """면을 지우고 나면 두 부채꼴이 꼭짓점 하나로만 이어진 '나비 정점'과 몇 면짜리 부스러기가 남는다.
+    OpenMVS v2.3 TextureMesh 가 여기서 unordered_map::at 으로 죽는다(Pix4D building: 나비 정점 11,598개)."""
+    import trimesh
+    for _ in range(rounds):
+        e = np.sort(m.faces[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 2), 1)
+        u, c = np.unique(e, axis=0, return_counts=True)
+        bc = np.bincount(u[c == 1].ravel(), minlength=len(m.vertices))
+        bad = bc > 2  # 경계 모서리가 3개 이상 닿은 정점 = 나비
+        if not bad.any():
+            break
+        m.update_faces(~bad[m.faces].any(1))
+    cc = trimesh.graph.connected_components(m.face_adjacency, nodes=np.arange(len(m.faces)))
+    keep = np.zeros(len(m.faces), bool)
+    for x in cc:
+        if len(x) >= min_faces:
+            keep[x] = True
+    m.update_faces(keep)
+    m.remove_unreferenced_vertices()
+
+
 def prune_mesh(mesh_path: Path, points_path: Path, dst: Path, strict: float | None = None, log=print) -> Path:
     """Poisson 메쉬에서 측정점과 동떨어진 면과 바늘처럼 긴 삼각형(가시)을 지운다.
     strict(점 간격의 배수): 측정용(포토그래메트리). 면의 세 꼭짓점·중심이 모두 측정점에서 이 거리 안인 면만 남긴다
@@ -118,6 +139,8 @@ def prune_mesh(mesh_path: Path, points_path: Path, dst: Path, strict: float | No
         n0 = len(m.faces)
         m.update_faces(~(far | needle))
         m.remove_unreferenced_vertices()
+        if strict:
+            _fix_topology(m)
         m.export(dst)
         log(f"  메쉬 가시 정리{'(측정용 엄격)' if strict else ''}: {n0:,} → {len(m.faces):,}면 "
             f"(측정점과 먼 면 {int(far.sum()):,}, 바늘 {int(needle.sum()):,})")
@@ -391,10 +414,24 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
                     obj = _color_from_points(mesh, dense / "fused.ply", mvs, log)
         except Exception as e:
             log(f"  텍스처 점검 생략: {e}")
+    if not obj.exists() and mesh.exists():
+        # TextureMesh 가 죽으면(v2.3 unordered_map::at — Pix4D building 36장에서 재현) 파이썬 사진 텍스처 굽기로
+        pts = dense / "fused.ply" if (dense / "fused.ply").exists() else mvs / "scene_dense.ply"
+        colored = _color_from_points(mesh, pts, mvs, log, smooth=0)  # 형상은 그대로(측정용) — 색은 안 보인 면 대체용
+        obj = colored
+        if (dense / "sparse").exists() and (dense / "images").exists():
+            try:
+                import trimesh
+                from .texture import bake
+                maxf = {"draft": 600_000, "medium": 900_000, "high": 1_200_000, "ultra": 1_500_000}[quality]
+                tm, _ = bake(trimesh.load(colored, process=False), dense / "sparse", dense / "images",
+                             atlas=8192, max_faces=maxf, log=log)
+                obj = mvs / "scene_baked.glb"
+                tm.export(obj)
+            except Exception as e:
+                log(f"  사진 텍스처 굽기 실패 → 점군 색 메쉬 사용: {e}")
+                obj = colored
     if not obj.exists():
-        if engine == "colmap" and mesh.exists():
-            obj = _color_from_points(mesh, dense / "fused.ply", mvs, log)  # 사진 텍스처 대신 점군 색
-        else:
-            raise RuntimeError("텍스처 메쉬가 생성되지 않았습니다")
+        raise RuntimeError("텍스처 메쉬가 생성되지 않았습니다")
     ply = mvs / "scene_dense.ply"
     return {"textured_obj": obj, "dense_ply": ply if ply.exists() else None, "log": logf}
