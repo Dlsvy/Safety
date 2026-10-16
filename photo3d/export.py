@@ -162,7 +162,7 @@ def decimate(mesh: trimesh.Trimesh, target_faces: int) -> trimesh.Trimesh:
 
 
 def light_model(mesh: trimesh.Trimesh, sparse: Path, img_dir: Path, out: Path, extra: list | None = None,
-                faces: int = 600_000, atlas: int = 8192, log=print) -> dict | None:
+                faces: int = 600_000, atlas: int = 4096, log=print) -> dict | None:
     """보기용 가벼운 모델: 면을 줄인 뒤 사진에서 텍스처를 다시 굽는다(줄이면 원래 UV 가 깨지므로).
     측정·충돌은 원본(site_model.glb·site_collider.glb)을 쓰고 이것은 유니티·웹 보기·VR 용."""
     from .texture import bake
