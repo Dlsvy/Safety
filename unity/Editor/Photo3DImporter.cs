@@ -17,7 +17,8 @@ namespace Photo3D.EditorTools
             string name = new DirectoryInfo(src).Name;
             string dstRel = $"Assets/Photo3DSites/{name}";
             Directory.CreateDirectory(dstRel);
-            foreach (var f in new[] { "site_model.glb", "site_collider.glb", "site_estimated.glb", "site_meta.json", "report.json" })
+            foreach (var f in new[] { "site_model.glb", "site_collider.glb", "site_estimated.glb", "site_filled.glb", "site_splat.ply",
+                                       "site_meta.json", "report.json", "quality_report.html", "annotations.json", "cameras.json" })
             {
                 var p = Path.Combine(src, f);
                 if (File.Exists(p)) File.Copy(p, Path.Combine(dstRel, f), true);
@@ -37,6 +38,18 @@ namespace Photo3D.EditorTools
             var est = AssetDatabase.LoadAssetAtPath<GameObject>($"{dstRel}/site_estimated.glb");
             if (est != null) site.estimatedRoot = (GameObject)PrefabUtility.InstantiatePrefab(est, root.transform);
             site.Setup();
+            // 앱에서 그린 현장 표시(거리·반경·구역·위험)와 촬영 위치
+            var annJ = AssetDatabase.LoadAssetAtPath<TextAsset>($"{dstRel}/annotations.json");
+            var camJ = AssetDatabase.LoadAssetAtPath<TextAsset>($"{dstRel}/cameras.json");
+            if (annJ != null || camJ != null)
+            {
+                var ag = new GameObject("Annotations");
+                ag.transform.SetParent(root.transform, false);
+                var an = ag.AddComponent<Photo3DAnnotations>();
+                an.annotationsJson = annJ;
+                an.camerasJson = camJ;
+                an.Build();
+            }
             Undo.RegisterCreatedObjectUndo(root, "Import photo3d site");
             Selection.activeGameObject = root;
             var meta = Path.Combine(dstRel, "report.json");

@@ -118,6 +118,15 @@ def write(out: Path, rep: dict, work: Path, log=print) -> Path:
             row("축척·정확도", "검증 최대오차", f"{e:.0f}mm", _lvl(e, 30, 100, False), "독립 검증거리·검사점 기준")
         else:
             row("축척·정확도", "독립 검증", "없음", WARN, "check.csv(검증 거리)를 넣으면 정확도를 증명할 수 있음")
+    mk = g.get("markers_triangulated") or []
+    if not m.startswith("none") or mk:
+        n_mk = len(mk) if isinstance(mk, (list, dict)) else 0
+        # 엔젤스윙·Terra: 기준점 최소 4개, 넓은 현장은 50m×50m 마다 1개(고르게)
+        bb = (rep.get("model") or {}).get("size_m") or [0, 0, 0]
+        need = max(4, int(np.ceil(float(bb[0]) * float(bb[1]) / 2500.0))) if len(bb) >= 2 else 4
+        row("축척·정확도", "기준점(마커·GCP) 수", f"{n_mk}개 / 권장 {need}개 이상",
+            GOOD if n_mk >= need else WARN if n_mk >= 2 else BAD,
+            "최소 4개, 넓은 현장은 50m×50m 마다 1개를 고르게 (엔젤스윙·DJI Terra 기준)")
     if g.get("marker_corner_reproj_px") is not None:
         row("축척·정확도", "마커 모서리 재투영", f"{g['marker_corner_reproj_px']:.2f}px",
             _lvl(g["marker_corner_reproj_px"], 1.0, 2.0, False), "")

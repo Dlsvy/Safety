@@ -87,6 +87,21 @@ def run(a) -> dict:
     info = export.export_all(res["textured_obj"], out, cams if not geo["method"].startswith("none") else None,
                              collider_faces=a.collider_faces, meta={"georef": geo, "sfm": st}, log=log)
     rep["model"] = info
+    try:  # 촬영 위치(뷰어·유니티에서 '어디서 찍었나' 표시) — GLB 와 같은 Y-up 좌표
+        camj = []
+        for iid in rec.reg_image_ids():
+            im = rec.image(iid)
+            pose = im.cam_from_world() if callable(im.cam_from_world) else im.cam_from_world
+            Rm = pose.matrix()[:, :3]
+            c = export.ZUP_TO_YUP[:3, :3] @ im.projection_center()
+            fwd = export.ZUP_TO_YUP[:3, :3] @ (Rm.T @ np.array([0.0, 0.0, 1.0]))
+            up = export.ZUP_TO_YUP[:3, :3] @ (Rm.T @ np.array([0.0, -1.0, 0.0]))
+            camj.append({"name": im.name, "pos": [round(float(v), 4) for v in c],
+                         "fwd": [round(float(v), 4) for v in fwd], "up": [round(float(v), 4) for v in up]})
+        with open(out / "cameras.json", "w", encoding="utf-8") as f:
+            json.dump({"frame": "gltf_yup_m", "cameras": camj}, f, ensure_ascii=False)
+    except Exception as e:
+        log(f"  촬영 위치 저장 생략: {e}")
     if a.fill and res.get("dense_ply"):
         from . import fill
         log("  구멍 메우기(주변 형상 Poisson) — 메운 부분은 '추정 영역'으로 따로 표시")

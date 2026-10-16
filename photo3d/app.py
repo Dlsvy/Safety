@@ -183,6 +183,7 @@ def job_view(job: dict) -> dict:
     v["has_est"] = (d / "out" / "site_estimated.glb").exists()
     v["has_splat"] = (d / "out" / "site_splat.ply").exists()
     v["has_report"] = (d / "out" / "quality_report.html").exists()
+    v["has_cams"] = (d / "out" / "cameras.json").exists()
     v["files"] = len([p for p in (d / "input").iterdir()]) if (d / "input").exists() else 0
     return v
 
@@ -297,6 +298,17 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})", p)
             if m:
                 return self._json(job_view(load_job(m.group(1))))
+            m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/annotations", p)
+            if m:
+                f = job_dir(m.group(1)) / "out" / "annotations.json"
+                return self._file(f) if f.exists() else self._json({"version": 1, "frame": "gltf_yup_m", "items": []})
+            m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/photo", p)
+            if m:  # 원본(작업용) 사진 — 촬영 위치를 누르면 보여줌
+                base = (job_dir(m.group(1)) / "out" / "work" / "images").resolve()
+                q = (base / parse_qs(u.query).get("name", [""])[0]).resolve()
+                if base not in q.parents or not q.is_file():
+                    return self._json({"error": "없음"}, 404)
+                return self._file(q)
             m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/preview", p)
             if m:
                 return self._json(preview_points(job_dir(m.group(1))))
@@ -378,6 +390,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         u = urlparse(self.path)
+        ma = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/annotations", unquote(u.path))
+        if ma:  # 현장 표시(거리·반경·구역·위험) 저장 → 유니티가 같은 좌표로 읽음
+            try:
+                b = self._body_json()
+                if not isinstance(b.get("items"), list) or len(json.dumps(b)) > 2_000_000:
+                    return self._json({"error": "형식 오류"}, 400)
+                f = job_dir(ma.group(1)) / "out" / "annotations.json"
+                f.write_text(json.dumps(b, ensure_ascii=False, indent=1), encoding="utf-8")
+                return self._json({"ok": True, "n": len(b["items"])})
+            except KeyError:
+                return self._json({"error": "작업 없음"}, 404)
         m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/files", unquote(u.path))
         if not m:
             return self._json({"error": "없는 경로"}, 404)

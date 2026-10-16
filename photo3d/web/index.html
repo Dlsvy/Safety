@@ -52,6 +52,8 @@ button:focus-visible,.btn:focus-visible,input:focus-visible{outline:2px solid va
 .mode label strong{display:block;color:var(--ink);font-size:14px}
 .mode label:has(input:checked){border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
 .mode input{accent-color:var(--accent);margin-top:3px}
+.guide ol{margin:8px 0 4px;padding-left:20px;display:grid;gap:4px;color:var(--ink);line-height:1.5}
+.guide .n{font-size:12px;color:var(--muted);margin:4px 0 0}
 details{margin:6px 0 12px;font-size:13px;color:var(--muted)}
 details input{margin-top:6px;width:100%}
 .bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:10px}
@@ -101,6 +103,27 @@ details input{margin-top:6px;width:100%}
 .vbar [hidden]{display:none}
 .vbar button:disabled{opacity:.4}
 .vbar button.on{background:var(--accent);color:#151719;border-color:var(--accent)}
+.tools{display:inline-flex;gap:6px;flex-wrap:wrap}
+.apanel{position:absolute;right:max(12px,env(safe-area-inset-right,0px));top:64px;width:310px;max-height:calc(100% - 140px);box-sizing:border-box;overflow-x:hidden;
+  overflow:auto;background:#1a1d20f2;color:#eceae4;border:1px solid #3a3f45;border-radius:10px;padding:10px 12px;font-size:13px}
+.apanel .ah{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.apanel .sv{color:#a2a7ad;font-size:12px}
+.apanel .n{color:#a2a7ad;font-size:12px;margin:6px 0 0}
+.apanel input,.apanel select,.apanel textarea{font:inherit;font-size:13px;background:#101214;color:#eceae4;border:1px solid #3a3f45;border-radius:6px;padding:4px 6px}
+.apanel input[type=number]{width:64px}
+.apanel textarea{width:100%;box-sizing:border-box;min-height:44px;margin-top:4px}
+.topt{border-bottom:1px solid #33373c;padding-bottom:8px;margin-bottom:8px;line-height:2}
+.topt:empty{display:none}
+.alist{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.alist li{border:1px solid #33373c;border-radius:8px;padding:6px 8px}
+.alist li.sel{border-color:var(--accent)}
+.alist .r1{display:flex;gap:6px;align-items:center}
+.alist .r1 input[type=text]{flex:1;min-width:0}
+.alist .k{font-size:11px;font-weight:600;padding:1px 6px;border-radius:99px;background:#33373c;white-space:nowrap}
+.alist .v{font-family:var(--mono);font-size:12px;color:#cfd3d8;margin-top:4px;line-height:1.6;overflow-wrap:anywhere}
+.alist .x{background:none;border:0;color:#a2a7ad;cursor:pointer;font-size:15px;padding:0 4px}
+#aphoto img{width:100%;border-radius:6px;display:block}
+@media (max-width:640px){.apanel{left:12px;right:12px;width:auto;top:auto;bottom:64px;max-height:45%}}
 .vinfo{position:absolute;left:max(12px,env(safe-area-inset-left,0px));bottom:calc(12px + env(safe-area-inset-bottom,0px));
   color:#eceae4;font-size:13px;background:#1f2226dd;padding:8px 12px;border-radius:8px;max-width:calc(100% - 24px)}
 .vinfo .d{font-family:var(--mono);font-size:18px;color:var(--accent)}
@@ -132,6 +155,21 @@ details input{margin-top:6px;width:100%}
       <label><input type="radio" name="mode" value="fast" checked><span><strong>빠르게</strong>약 4~6분 · 미리보기</span></label>
       <label><input type="radio" name="mode" value="best"><span><strong>최고 품질</strong>GPU 최대 · 15~30분</span></label>
     </div>
+    <details class="guide"><summary>촬영 가이드 (현장 안전관리자용)</summary>
+      <ol>
+        <li>사람·장비가 적은 밝은 시간에 찍으세요. 렌즈를 닦고 배터리·저장공간을 확인합니다.</li>
+        <li>원본 사진을 그대로 올리세요. 카톡 전송본·편집한 사진은 안 됩니다. 흔들린 사진은 다시 찍습니다.</li>
+        <li>실제 크기가 필요하면 ArUco 마커(또는 기준점)를 <b>4개 이상</b>, 넓은 현장은 <b>50m×50m 마다 1개</b>씩 고르게 놓고, 줄자로 잰 거리 1~2개를 적어 두세요.</li>
+        <li>대상 주위를 천천히 돌며 정면과 비스듬한 각도를 함께 찍습니다. 앞뒤 사진이 60~80% 겹치게(한두 걸음마다 한 장).</li>
+        <li>크레인 설치 위치·아웃리거 자리·인양 경로·주변 전선과 건물은 한 바퀴 더 돌며 찍으세요.</li>
+        <li>영상은 평소보다 천천히 걷고 방향도 천천히 트세요. 한 자리에 오래 서 있지 않아도 됩니다(자동으로 걸러냄).</li>
+        <li>360 카메라: 머리 위로 수직으로 들고, 타임랩스 2초 간격(8K 이상) 또는 2:1 파노라마 MP4로 내보내 올리세요.</li>
+        <li>360 촬영 동선은 한 번에 도는 경로로, 같은 곳을 왕복하지 마세요. 문틀·구역 경계에서는 3~4초 멈춥니다.</li>
+        <li>층·구역마다 따로 찍고, 시작점·끝점(입구 모서리)을 정해 두세요.</li>
+        <li>공정 기록용 사진은 바닥에 표시한 같은 지점에서 같은 방향으로 찍으면 날짜별 비교가 쉽습니다.</li>
+      </ol>
+      <p class="n">참고: 엔젤스윙 유저가이드(실내 360 촬영·GCP 권장사항), DJI Terra·PIX4Dcatch 촬영 기준을 폰 촬영에 맞게 옮김</p>
+    </details>
     <details><summary>PC 에 있는 폴더로 만들기 / 실측 크기 맞추기</summary>
       <input id="lpath" type="text" placeholder="PC 폴더 경로 (예: C:\photo3d\data\strecha\Benchmarking_Camera_Calibration_2008\castle-P30\images)">
       <input id="scale" type="text" placeholder="줄자 거리: 마커ID1,마커ID2,거리m (예: 0,3,10.25)">
@@ -153,10 +191,24 @@ details input{margin-top:6px;width:100%}
     <button id="splatb" aria-pressed="false" hidden>실사 보기</button>
     <button id="fillb" aria-pressed="false" hidden>구멍 메움</button>
     <button id="estb" aria-pressed="false" hidden>메운 곳 표시</button>
-    <button id="measure" aria-pressed="false">거리 재기</button>
+    <span class="tools" role="group" aria-label="현장 표시 도구">
+      <button id="measure" data-tool="dist" aria-pressed="false">거리</button>
+      <button data-tool="circle" aria-pressed="false">반경</button>
+      <button data-tool="box" aria-pressed="false">구역</button>
+      <button data-tool="pin" aria-pressed="false">위험 표시</button>
+    </span>
+    <button id="camsb" aria-pressed="false" hidden>촬영 위치</button>
+    <button id="apanelb" aria-pressed="false">표시 목록</button>
     <a class="btn" id="dl" download>GLB 내려받기</a>
     <button id="close">닫기</button>
   </div>
+  <aside class="apanel" id="apanel" hidden aria-label="현장 표시 목록">
+    <div class="ah"><strong>현장 표시</strong><span class="sv" id="asave"></span></div>
+    <div class="topt" id="topt"></div>
+    <div id="aphoto" hidden><img alt="촬영 사진" id="aphotoimg"><div class="n" id="aphotoname"></div></div>
+    <ol class="alist" id="alist"></ol>
+    <p class="n">유니티: 결과 폴더의 annotations.json (GLB 와 같은 좌표, m)</p>
+  </aside>
   <div class="vinfo" id="vinfo">끌어서 돌리기 · 휠/두 손가락으로 확대 · 오른쪽 끌기로 이동</div>
 </div>
 
@@ -431,12 +483,15 @@ async function openViewer(j) {
   $("dl").setAttribute("download", `${j.name}.glb`);
   useFill = !!j.has_filled; showEst = false; useSplat = !!j.has_splat;
   $("fillb").hidden = !j.has_filled; $("estb").hidden = !j.has_est; $("splatb").hidden = !j.has_splat;
-  syncToggles(); loadModel(true);
+  $("camsb").hidden = !j.has_cams; camsOn = false; camData = null; $("camsb").classList.remove("on"); $("aphoto").hidden = true;
+  if (camG) camG.clear();
+  setTool(null); showPanel(false); $("asave").textContent = "";
+  syncToggles(); await loadModel(true); loadAnn();
 }
 let useFill = false, showEst = false, estModel = null, useSplat = false, splatView = null;
 function syncToggles(){
   $("splatb").classList.toggle("on", useSplat); $("splatb").setAttribute("aria-pressed", useSplat);
-  $("fillb").disabled = useSplat; $("measure").disabled = useSplat;
+  $("fillb").disabled = useSplat; document.querySelectorAll("[data-tool]").forEach((b) => b.disabled = useSplat);
   $("fillb").classList.toggle("on", useFill); $("fillb").setAttribute("aria-pressed", useFill);
   $("estb").classList.toggle("on", showEst); $("estb").setAttribute("aria-pressed", showEst);
   $("estb").disabled = !useFill || useSplat;
@@ -477,13 +532,14 @@ async function loadModel(frame) {
   const j = curJob, file = useFill ? "site_filled.glb" : "site_model.glb";
   $("vinfo").textContent = "불러오는 중…";
   await clearScene();
-  new GLTFLoader().load(`/files/${j.id}/${file}`, (g) => {
-    model = g.scene; basic(model); scene.add(model);
+  await new Promise((res) => new GLTFLoader().load(`/files/${j.id}/${file}`, (g) => {
+    model = g.scene; basic(model); scene.add(model); res();
     if (frame) frameBox(new THREE.Box3().setFromObject(model));
     $("vinfo").textContent = useFill ? "구멍을 주변 형상으로 메운 모델 · '메운 곳 표시'로 측정 안 된 부분 확인"
                                      : "끌어서 돌리기 · 휠/두 손가락으로 확대 · 오른쪽 끌기로 이동";
     if (useFill && showEst) loadEst();
-  }, undefined, () => { $("vinfo").textContent = "3D 파일을 불러오지 못했습니다."; });
+    if (annG) renderAnn();
+  }, undefined, () => { $("vinfo").textContent = "3D 파일을 불러오지 못했습니다."; res(); }));
 }
 function loadEst() {
   new GLTFLoader().load(`/files/${curJob.id}/site_estimated.glb`, (g) => {
@@ -498,33 +554,182 @@ $("splatb").onclick = () => { useSplat = !useSplat; if (useSplat) { showEst = fa
 $("fillb").onclick = () => { useFill = !useFill; if (!useFill) showEst = false; syncToggles(); loadModel(false); };
 $("estb").onclick = () => { showEst = !showEst; syncToggles();
   if (showEst) loadEst(); else if (estModel) { scene.remove(estModel); estModel = null; } };
-$("close").onclick = () => { $("viewer").classList.remove("on"); measuring = false; setMeasure(false); };
+$("close").onclick = () => { $("viewer").classList.remove("on"); setTool(null); };
 addEventListener("keydown", (e) => { if (e.key === "Escape") $("close").click(); });
 
-function setMeasure(on){ measuring = on; $("measure").classList.toggle("on", on); $("measure").setAttribute("aria-pressed", on);
-  if (on) { clearMarks(); $("vinfo").textContent = "재고 싶은 두 지점을 차례로 누르세요"; } }
-$("measure").onclick = () => setMeasure(!measuring);
-function clearMarks(){ if (marks) marks.clear(); pts = []; }
+/* ── 현장 표시: 거리·반경·구역·위험 표시 (엔젤스윙 측정·장비·마커 기능을 폰 3D 에 맞게) ──
+   좌표는 GLB 와 같은 Y-up, m. 작업마다 annotations.json 으로 저장 → 유니티가 같은 좌표로 읽는다. */
+let tool = null, ann = {version: 1, frame: "gltf_yup_m", items: []}, annG = null, pend = [], selId = null, saveT = null;
+let camsOn = false, camG = null, camData = null;
+const LV = {warn: ["주의", 0xfab219], serious: ["위험", 0xec835a], critical: ["심각", 0xd03b3b]};
+const TOOLNAME = {dist: "거리", circle: "반경", box: "구역", pin: "위험 표시"};
+function metric() { return !!(curJob && curJob.grade && curJob.grade.grade !== "D"); }
+function U() { return metric() ? "m" : "(임의)"; }
+function f2(v) { return (+v).toFixed(2); }
+function sceneSize() { return model ? new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3()).length() : 10; }
+function v3(a) { return new THREE.Vector3(a[0], a[1], a[2]); }
+function arr(v) { return [+v.x.toFixed(4), +v.y.toFixed(4), +v.z.toFixed(4)]; }
+function setMeasure(on) { setTool(on ? "dist" : null); }
+function setTool(t) {
+  tool = t; pend = [];
+  document.querySelectorAll("[data-tool]").forEach((b) => { const on = b.dataset.tool === t; b.classList.toggle("on", on); b.setAttribute("aria-pressed", on); });
+  measuring = !!t;
+  if (t) showPanel(true);
+  const o = $("topt");
+  if (t === "dist") o.innerHTML = `<b>거리</b> — 두 지점을 차례로 누르세요 (직선·수평·높이차)`;
+  else if (t === "circle") o.innerHTML = `<b>반경</b> — 중심을 누르세요 · 반경 <input type="number" id="o_r" value="20" min="0.1" step="0.5"> ${U()}<br><span class="n">크레인 선회반경·낙하 위험반경 확인</span>`;
+  else if (t === "box") o.innerHTML = `<b>구역</b> — 바닥 중심을 누르세요<br>가로 <input type="number" id="o_w" value="5" step="0.5"> 세로 <input type="number" id="o_d" value="5" step="0.5"> 높이 <input type="number" id="o_h" value="5" step="0.5"> ${U()}<br>회전 <input type="number" id="o_y" value="0" step="5">° <span class="n">자재 적치·출입금지·인양 경로</span>`;
+  else if (t === "pin") o.innerHTML = `<b>위험 표시</b> — 위치를 누르세요 · 등급 <select id="o_lv"><option value="warn">주의</option><option value="serious" selected>위험</option><option value="critical">심각</option></select>`;
+  else o.innerHTML = "";
+  if (t) $("vinfo").textContent = $("topt").textContent.split("—")[1]?.trim() || "";
+}
+document.querySelectorAll("[data-tool]").forEach((b) => b.onclick = () => setTool(tool === b.dataset.tool ? null : b.dataset.tool));
+function showPanel(on) { $("apanel").hidden = !on; $("apanelb").classList.toggle("on", on); $("apanelb").setAttribute("aria-pressed", on); }
+$("apanelb").onclick = () => showPanel($("apanel").hidden);
+function clearMarks() { pend = []; if (marks) marks.clear(); }
+
+async function loadAnn() {
+  try { ann = await api(`/api/jobs/${curJob.id}/annotations`); } catch (e) { ann = {version: 1, frame: "gltf_yup_m", items: []}; }
+  ann.items = ann.items || []; selId = null; renderAnn(); renderList();
+  if (ann.items.length) showPanel(true);
+}
+function saveAnn() {
+  clearTimeout(saveT); $("asave").textContent = "저장 중…";
+  saveT = setTimeout(async () => {
+    try { await api(`/api/jobs/${curJob.id}/annotations`, {method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify(ann)});
+      $("asave").textContent = `저장됨 · ${ann.items.length}개`; }
+    catch (e) { $("asave").textContent = "저장 실패: " + e.message; }
+  }, 500);
+}
+function label3d(text, pos, color) {
+  const c = document.createElement("canvas"), g = c.getContext("2d"), fs = 44;
+  g.font = `600 ${fs}px system-ui, "Malgun Gothic", sans-serif`;
+  const w = Math.ceil(g.measureText(text).width) + 28; c.width = w; c.height = fs + 22;
+  g.font = `600 ${fs}px system-ui, "Malgun Gothic", sans-serif`;
+  g.fillStyle = "#101214e6"; g.beginPath(); g.roundRect(0, 0, w, c.height, 14); g.fill();
+  g.fillStyle = "#" + new THREE.Color(color).getHexString(); g.fillRect(0, 0, 8, c.height);
+  g.fillStyle = "#eceae4"; g.textBaseline = "middle"; g.fillText(text, 18, c.height / 2 + 2);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({map: new THREE.CanvasTexture(c), depthTest: false, transparent: true}));
+  const k = sceneSize() / 40; sp.scale.set(k * w / c.height, k, 1); sp.position.copy(pos); sp.renderOrder = 5; return sp;
+}
+function line(pts, color, dashed) {
+  const g = new THREE.BufferGeometry().setFromPoints(pts);
+  const m = dashed ? new THREE.LineDashedMaterial({color, dashSize: sceneSize() / 120, gapSize: sceneSize() / 200, depthTest: false})
+                   : new THREE.LineBasicMaterial({color, depthTest: false});
+  const l = new THREE.Line(g, m); if (dashed) l.computeLineDistances(); l.renderOrder = 4; return l;
+}
+function dot(p, color, r) { const m = new THREE.Mesh(new THREE.SphereGeometry(r || sceneSize() / 220), new THREE.MeshBasicMaterial({color, depthTest: false})); m.position.copy(p); m.renderOrder = 4; return m; }
+function distInfo(it) { const a = v3(it.a), b = v3(it.b), d = b.clone().sub(a);
+  return {d3: d.length(), h: Math.hypot(d.x, d.z), dy: d.y}; }
+function renderAnn() {
+  if (!annG) { annG = new THREE.Group(); scene.add(annG); }
+  annG.clear();
+  const SEL = 0xf2b705, S = sceneSize();
+  for (const it of ann.items) {
+    const sel = it.id === selId;
+    if (it.type === "distance") {
+      const a = v3(it.a), b = v3(it.b), col = sel ? SEL : 0x7cc4ff, I = distInfo(it);
+      annG.add(line([a, b], col), dot(a, col), dot(b, col));
+      const k = new THREE.Vector3(b.x, a.y, b.z); annG.add(line([a, k, b], 0x8b9097, true));
+      annG.add(label3d(`${it.label ? it.label + " " : ""}${f2(I.d3)} · 수평 ${f2(I.h)} · 높이 ${f2(I.dy)} ${U()}`, a.clone().lerp(b, 0.5), col));
+    } else if (it.type === "circle") {
+      const c = v3(it.center), col = sel ? SEL : 0xec835a, pts = [];
+      for (let k = 0; k <= 128; k++) { const t = k / 128 * Math.PI * 2; pts.push(new THREE.Vector3(c.x + it.radius * Math.cos(t), c.y + S / 400, c.z + it.radius * Math.sin(t))); }
+      annG.add(line(pts, col));
+      const disk = new THREE.Mesh(new THREE.CircleGeometry(it.radius, 96), new THREE.MeshBasicMaterial({color: col, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false}));
+      disk.rotation.x = -Math.PI / 2; disk.position.set(c.x, c.y + S / 500, c.z); annG.add(disk, dot(c, col));
+      annG.add(line([c, pts[0]], col, true));
+      annG.add(label3d(`${it.label || "반경"} R ${f2(it.radius)} ${U()}`, c.clone().add(new THREE.Vector3(0, S / 30, 0)), col));
+    } else if (it.type === "box") {
+      const col = sel ? SEL : 0x4fd1a5, geo = new THREE.BoxGeometry(it.size[0], it.size[1], it.size[2]);
+      const fill = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({color: col, transparent: true, opacity: 0.14, depthWrite: false}));
+      const edge = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({color: col}));
+      const g = new THREE.Group(); g.add(fill, edge); g.position.copy(v3(it.center)); g.rotation.y = THREE.MathUtils.degToRad(it.yaw || 0); annG.add(g);
+      annG.add(label3d(`${it.label || "구역"} ${it.size.map(f2).join("×")} ${U()}`, v3(it.center).add(new THREE.Vector3(0, it.size[1] / 2 + S / 60, 0)), col));
+    } else if (it.type === "pin") {
+      const col = sel ? SEL : LV[it.level || "serious"][1], p = v3(it.pos), top = p.clone().add(new THREE.Vector3(0, S / 25, 0));
+      annG.add(line([p, top], col), dot(p, col), dot(top, col, S / 140));
+      annG.add(label3d(`${LV[it.level || "serious"][0]} · ${it.label || "위험"}`, top.clone().add(new THREE.Vector3(0, S / 60, 0)), col));
+    }
+  }
+  for (const p of pend) annG.add(dot(p, SEL));
+}
+function itemValue(it) {
+  if (it.type === "distance") { const I = distInfo(it); return `직선 ${f2(I.d3)} · 수평 ${f2(I.h)} · 높이차 ${f2(I.dy)} ${U()}`; }
+  if (it.type === "circle") return `반경 <input type="number" step="0.5" data-f="radius" value="${it.radius}"> ${U()}`;
+  if (it.type === "box") return `가로 <input type="number" step="0.5" data-f="s0" value="${it.size[0]}"> 세로 <input type="number" step="0.5" data-f="s2" value="${it.size[2]}"><br>높이 <input type="number" step="0.5" data-f="s1" value="${it.size[1]}"> 회전 <input type="number" step="5" data-f="yaw" value="${it.yaw || 0}">°`;
+  if (it.type === "pin") return `<select data-f="level">${Object.entries(LV).map(([k, v]) => `<option value="${k}" ${it.level === k ? "selected" : ""}>${v[0]}</option>`).join("")}</select>
+    <textarea data-f="memo" placeholder="메모(조치 내용 등)">${(it.memo || "").replace(/</g, "&lt;")}</textarea>`;
+  return "";
+}
+function renderList() {
+  const ol = $("alist"); ol.innerHTML = "";
+  if (!ann.items.length) { ol.innerHTML = `<li class="n">아직 없습니다. 위 도구로 표시를 추가하세요.</li>`; }
+  ann.items.forEach((it) => {
+    const li = document.createElement("li"); li.classList.toggle("sel", it.id === selId);
+    li.innerHTML = `<div class="r1"><span class="k">${{distance: "거리", circle: "반경", box: "구역", pin: "위험"}[it.type]}</span>
+      <input type="text" data-f="label" value="${(it.label || "").replace(/"/g, "&quot;")}" placeholder="이름" aria-label="이름">
+      <button class="x" title="삭제" aria-label="삭제">✕</button></div><div class="v">${itemValue(it)}</div>`;
+    li.onclick = (e) => { if (e.target.closest("input,select,textarea,button")) return; selId = it.id; renderAnn(); renderList(); };
+    li.querySelector(".x").onclick = () => { ann.items = ann.items.filter((x) => x !== it); renderAnn(); renderList(); saveAnn(); };
+    li.querySelectorAll("[data-f]").forEach((el) => el.oninput = () => {
+      const f = el.dataset.f, v = el.value;
+      if (f === "label" || f === "memo" || f === "level") it[f] = v;
+      else if (f === "radius") it.radius = Math.max(0.01, +v || it.radius);
+      else if (f === "yaw") it.yaw = +v || 0;
+      else if (f[0] === "s") { const i = +f[1], old = it.size[1]; it.size[i] = Math.max(0.01, +v || it.size[i]); if (i === 1) it.center[1] += (it.size[1] - old) / 2; }
+      renderAnn(); if (f === "level") renderList(); saveAnn();
+    });
+    ol.append(li);
+  });
+  $("asave").textContent = $("asave").textContent || `${ann.items.length}개`;
+}
+function addItem(it) { it.id = Math.random().toString(36).slice(2, 10); ann.items.push(it); selId = it.id; renderAnn(); renderList(); saveAnn(); }
+
+/* 촬영 위치 (COLMAP 카메라) — 누르면 그 사진을 보여준다 */
+async function loadCams() {
+  if (!camData) { try { camData = (await api(`/files/${curJob.id}/cameras.json`)).cameras; } catch (e) { camData = []; } }
+  if (!camG) { camG = new THREE.Group(); scene.add(camG); }
+  camG.clear(); const S = sceneSize() / 70;
+  for (const c of camData) {
+    const p = v3(c.pos), f = v3(c.fwd).normalize(), u = v3(c.up).normalize(), r = f.clone().cross(u).normalize();
+    const tip = p.clone().add(f.clone().multiplyScalar(S * 1.4));
+    const cs = [[1, 1], [1, -1], [-1, -1], [-1, 1]].map(([a, b]) => tip.clone().add(r.clone().multiplyScalar(a * S * 0.6)).add(u.clone().multiplyScalar(b * S * 0.45)));
+    const pts = [p, cs[0], p, cs[1], p, cs[2], p, cs[3], cs[0], cs[1], cs[1], cs[2], cs[2], cs[3], cs[3], cs[0]];
+    const ls = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({color: 0xf2b705}));
+    const hit = new THREE.Mesh(new THREE.SphereGeometry(S * 0.7), new THREE.MeshBasicMaterial({visible: false}));
+    hit.position.copy(p); hit.userData.name = c.name; camG.add(ls, hit);
+  }
+  $("vinfo").textContent = `사진 찍은 위치 ${camData.length}곳 · 노란 사각뿔을 누르면 그 사진을 봅니다`;
+}
+$("camsb").onclick = () => { camsOn = !camsOn; $("camsb").classList.toggle("on", camsOn); $("camsb").setAttribute("aria-pressed", camsOn);
+  if (camsOn) loadCams(); else { if (camG) camG.clear(); $("aphoto").hidden = true; } };
 
 let downAt = null;
 cv.addEventListener("pointerdown", (e) => { downAt = [e.clientX, e.clientY]; });
 cv.addEventListener("pointerup", (e) => {
-  if (!measuring || !model || !downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 6) return;
+  if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 6) return;
   const r = cv.getBoundingClientRect();
   ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  if (!tool && camsOn && camG) {
+    const h = ray.intersectObjects(camG.children.filter((o) => o.isMesh), false)[0];
+    if (h) { showPanel(true); $("aphoto").hidden = false; $("aphotoimg").src = `/api/jobs/${curJob.id}/photo?name=${encodeURIComponent(h.object.userData.name)}`;
+      $("aphotoname").textContent = h.object.userData.name; }
+    return;
+  }
+  if (!tool || !model) return;
   const hit = ray.intersectObject(model, true)[0]; if (!hit) return;
-  if (pts.length === 2) clearMarks();
-  pts.push(hit.point.clone());
-  const size = new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3()).length() / 200;
-  const dot = new THREE.Mesh(new THREE.SphereGeometry(size), new THREE.MeshBasicMaterial({color: 0xf2b705, depthTest: false}));
-  dot.position.copy(hit.point); dot.renderOrder = 2; marks.add(dot);
-  if (pts.length === 2) {
-    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({color: 0xf2b705, depthTest: false}));
-    line.renderOrder = 2; marks.add(line);
-    const d = pts[0].distanceTo(pts[1]);
-    const metric = curJob && curJob.grade && curJob.grade.grade !== "D";
-    $("vinfo").innerHTML = `거리 <span class="d">${d.toFixed(3)}</span> ${metric ? "m" : "(임의 단위 — 줄자 거리나 마커를 넣으면 m)"}`;
-  } else $("vinfo").textContent = "두 번째 지점을 누르세요";
+  const p = hit.point.clone();
+  if (tool === "dist") {
+    pend.push(p); renderAnn();
+    if (pend.length === 2) { const [a, b] = pend; pend = []; addItem({type: "distance", a: arr(a), b: arr(b), label: ""});
+      const I = distInfo(ann.items[ann.items.length - 1]);
+      $("vinfo").innerHTML = `직선 <span class="d">${f2(I.d3)}</span> · 수평 ${f2(I.h)} · 높이차 ${f2(I.dy)} ${metric() ? "m" : "(임의 단위 — 줄자 거리나 마커를 넣으면 m)"}`; }
+    else $("vinfo").textContent = "두 번째 지점을 누르세요";
+  } else if (tool === "circle") addItem({type: "circle", center: arr(p), radius: +($("o_r")?.value) || 20, label: "선회반경"});
+  else if (tool === "box") { const w = +$("o_w").value || 5, d = +$("o_d").value || 5, h = +$("o_h").value || 5;
+    addItem({type: "box", center: [+p.x.toFixed(4), +(p.y + h / 2).toFixed(4), +p.z.toFixed(4)], size: [w, h, d], yaw: +$("o_y").value || 0, label: "구역"}); }
+  else if (tool === "pin") addItem({type: "pin", pos: arr(p), level: $("o_lv").value, label: "위험", memo: ""});
 });
 </script>
 </body>
