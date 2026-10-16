@@ -193,7 +193,7 @@ def run(a) -> dict:
 
     res = mvs.densify_and_mesh(rec, img_dir, work, quality=a.quality, engine=a.dense,
                                colmap_bin=a.colmap_bin, on_dense_ready=on_dense_ready, prior=a.prior,
-                               subject=a.subject, resume=resumed, log=log)
+                               subject=a.subject, resume=resumed, strict=a.pipeline == "pg", log=log)
     if a.fill and "fill" not in side and res.get("dense_ply"):  # CPU(OpenMVS) 경로: 콜백 없음 → 지금 시작
         on_dense_ready(work / "dense", res["dense_ply"])
 
@@ -226,7 +226,8 @@ def run(a) -> dict:
             if m is None:  # 바닥 조각이 붙은 OBJ 는 재료가 둘 → 본 메쉬는 GLB 와 같은 정리본을 다시 읽음
                 m = export.clean_mesh(_load(Path(res["textured_obj"])), cams if not geo["method"].startswith("none") else None,
                                       log=lambda *_: None)
-            rep["survey"] = {"ortho": survey.ortho_dsm([m] + extra, out, log=log)}
+            zc = survey.plan_cut_height([m], cams if len(cams) else None)
+            rep["survey"] = {"ortho": survey.ortho_dsm([m] + extra, out, z_cut=zc, log=log)}
             if dense_pts:
                 rep["survey"]["points"] = survey.export_points(Path(dense_pts), out, m.bounds, log=log)
         except Exception as e:

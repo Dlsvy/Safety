@@ -88,11 +88,16 @@ def evaluate(scene: Path, out: Path, mesh: str = "site_model_zup.obj", tols=(0.0
         near = cKDTree((s * (R @ Pr.T)).T + t).query(gt, workers=-1)[0] < 0.5
     res = {"mesh": mesh, "cameras_matched": int(len(src)), "camera_align_err_mm_median": round(float(np.median(cam_err) * 1000), 1),
            "gt_near_ratio": round(float(near.mean()) * 100, 1)}
+    inside = d_our < 0.5  # 정답 스캔 0.5 m 안의 우리 점만(스캔하지 않은 먼 배경·하늘 제외 — ETH3D 공식 평가와 비슷하게)
+    res["our_inside_ratio"] = round(float(inside.mean()) * 100, 1)
     for tol in tols:
         acc = float((d_our < tol).mean())
+        acc_in = float((d_our[inside] < tol).mean()) if inside.any() else 0.0
         comp = float((d_gt[near] < tol).mean())
         res[f"{round(tol * 100)}cm"] = {"정확도": round(acc * 100, 1), "완전도": round(comp * 100, 1),
-                                        "F1": round(200 * acc * comp / max(acc + comp, 1e-9), 1)}
+                                        "F1": round(200 * acc * comp / max(acc + comp, 1e-9), 1),
+                                        "정확도_스캔범위": round(acc_in * 100, 1),
+                                        "F1_스캔범위": round(200 * acc_in * comp / max(acc_in + comp, 1e-9), 1)}
     res["median_dist_mm"] = round(float(np.median(d_our) * 1000), 1)
     return res
 

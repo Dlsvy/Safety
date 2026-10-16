@@ -39,9 +39,10 @@ def _tex_colors(mesh, fidx, bary):
 
 
 def ortho_dsm(meshes, out: Path, res: float | None = None, max_px: int = 8192, max_samples: int = 60_000_000,
-              log=print) -> dict | None:
+              z_cut: float | None = None, log=print) -> dict | None:
     """텍스처 메쉬(Z-up, m; 여러 개면 목록)를 위에서 내려다본 정사영상 + DSM.
-    면을 화소 크기에 맞춰 촘촘히 찍고 칸마다 가장 높은 점을 남긴다."""
+    면을 화소 크기에 맞춰 촘촘히 찍고 칸마다 가장 높은 점을 남긴다.
+    z_cut: 이 높이보다 위는 빼고 그린다(실내·지붕 아래 현장: 천장 대신 바닥이 보이는 평면도)."""
     import cv2
     meshes = [m for m in (meshes if isinstance(meshes, (list, tuple)) else [meshes]) if m is not None and len(m.faces)]
     if not meshes:
@@ -79,6 +80,9 @@ def ortho_dsm(meshes, out: Path, res: float | None = None, max_px: int = 8192, m
             sq = np.sqrt(r1)
             bary = np.stack([1 - sq, sq * (1 - r2), sq * r2], 1)
             P = (T[fid] * bary[:, :, None]).sum(1)
+            if z_cut is not None:
+                below = P[:, 2] <= z_cut
+                P, fid, bary = P[below], fid[below], bary[below]
             ix = np.clip(((P[:, 0] - lo[0]) / res).astype(np.int64), 0, W - 1)
             iy = np.clip(((hi[1] - P[:, 1]) / res).astype(np.int64), 0, H - 1)  # 위쪽 = 북(+Y)
             cell = iy * W + ix
@@ -124,11 +128,33 @@ def ortho_dsm(meshes, out: Path, res: float | None = None, max_px: int = 8192, m
     col[~valid] = 255
     cv2.imwrite(str(out / "site_dsm_color.png"), col)
     meta = {"m_per_px": round(res, 5), "size_px": [W, H], "x_min": float(lo[0]), "y_max": float(hi[1]),
+            "z_cut_m": None if z_cut is None else round(float(z_cut), 3),
             "z_range_m": [round(float(zl), 3), round(float(zh), 3)], "coverage": round(float(valid.mean()), 3),
             "note": "화소 (c,r) 중심 = (x_min + (c+0.5)*m_per_px, y_max - (r+0.5)*m_per_px). site_dsm.tif = 높이(m), 빈 곳 -9999"}
     (out / "site_ortho.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
-    log(f"  정사영상·DSM: {W}×{H}px ({res * 100:.1f} cm/px), 높이 {zl:.2f}~{zh:.2f} m")
+    log(f"  정사영상·DSM: {W}×{H}px ({res * 100:.1f} cm/px), 높이 {zl:.2f}~{zh:.2f} m"
+        + (f" · {z_cut:.2f} m 위(천장·지붕)는 잘라 평면도처럼" if z_cut is not None else ""))
     return meta
+
+
+def plan_cut_height(meshes, cams: np.ndarray | None) -> float | None:
+    """카메라보다 위에 큰 수평면(천장·지붕·캐노피)이 있으면 평면도 절단 높이(카메라 높이 + 여유)를 돌려준다.
+    드론처럼 카메라가 모든 것 위에 있으면 None."""
+    if cams is None or len(cams) < 3:
+        return None
+    zc = float(np.percentile(cams[:, 2], 90))
+    area_hi = area_all = 0.0
+    for m in meshes:
+        n = np.asarray(m.face_normals)
+        a = np.asarray(m.area_faces)
+        hz = np.abs(n[:, 2]) > 0.8
+        z = np.asarray(m.triangles_center)[:, 2]
+        area_all += float(a[hz].sum())
+        area_hi += float(a[hz & (z > zc + 0.3)].sum())
+    if area_all > 0 and area_hi / area_all > 0.1:
+        spread = float(np.ptp(cams[:, 2]))
+        return zc + max(0.5, 0.2 * spread)
+    return None
 
 
 def write_las(path: Path, xyz: np.ndarray, rgb: np.ndarray | None = None, scale: float = 0.001) -> int:

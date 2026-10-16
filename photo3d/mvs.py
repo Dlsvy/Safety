@@ -95,25 +95,32 @@ def _color_from_points(mesh_path: Path, points_path: Path, mvs: Path, log, smoot
         return mesh_path
 
 
-def prune_mesh(mesh_path: Path, points_path: Path, dst: Path, log=print) -> Path:
-    """Poisson 메쉬에서 측정점과 동떨어진 면과 바늘처럼 긴 삼각형(가시)을 지운다."""
+def prune_mesh(mesh_path: Path, points_path: Path, dst: Path, strict: float | None = None, log=print) -> Path:
+    """Poisson 메쉬에서 측정점과 동떨어진 면과 바늘처럼 긴 삼각형(가시)을 지운다.
+    strict(점 간격의 배수): 측정용(포토그래메트리). 면의 세 꼭짓점·중심이 모두 측정점에서 이 거리 안인 면만 남긴다
+    → 측정점 사이를 건너 이은 추정 면 제거. ETH3D delivery_area: 5cm F1 58→71%, 중앙 오차 62→26mm(완전도 78→66%)."""
     import trimesh
     from scipy.spatial import cKDTree
     try:
         m = trimesh.load(mesh_path, process=False, force="mesh")
-        pts = np.asarray(trimesh.load(points_path, process=False).vertices, float)
+        from .fill import read_points  # COLMAP fused.ply·OpenMVS 점군 모두
+        pts = np.asarray(read_points(points_path)[0], float)
         tree = cKDTree(pts)
         sp = float(np.median(tree.query(pts[:: max(1, len(pts) // 20000)], k=2)[0][:, 1]))
         d, _ = tree.query(m.triangles_center, workers=-1)
         el = np.linalg.norm(m.vertices[m.faces] - m.vertices[np.roll(m.faces, 1, 1)], axis=2).max(1)
         thin = el ** 2 / np.maximum(2 * m.area_faces, 1e-12)
         far = d > 20 * sp  # 가시는 수십~수백 배 떨어져 있다(6배는 점이 성긴 실제 표면까지 지움)
+        if strict:
+            dv, _ = tree.query(m.vertices, workers=-1)
+            far |= np.maximum(dv[m.faces].max(1), d) > strict * sp
         needle = (thin > 12) & (el > 8 * np.median(el))
         n0 = len(m.faces)
         m.update_faces(~(far | needle))
         m.remove_unreferenced_vertices()
         m.export(dst)
-        log(f"  메쉬 가시 정리: {n0:,} → {len(m.faces):,}면 (측정점과 먼 면 {int(far.sum()):,}, 바늘 {int(needle.sum()):,})")
+        log(f"  메쉬 가시 정리{'(측정용 엄격)' if strict else ''}: {n0:,} → {len(m.faces):,}면 "
+            f"(측정점과 먼 면 {int(far.sum()):,}, 바늘 {int(needle.sum()):,})")
         return dst
     except Exception as e:
         log(f"  메쉬 가시 정리 생략({e})")
@@ -195,7 +202,7 @@ def add_prior_points(fused: Path, dense: Path, log=print) -> int:
 def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
                      quality: str = "medium", threads: int = 0, engine: str = "openmvs",
                      colmap_bin: str | None = None, on_dense_ready=None, prior: bool = True,
-                     subject: bool = False, resume: bool = False, log=print) -> dict:
+                     subject: bool = False, resume: bool = False, strict: bool = False, log=print) -> dict:
     q = QUALITY[quality]
     sparse = work / "sparse_georef"
     if sparse.exists():
@@ -312,7 +319,8 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
         _run([colmap_bin, "poisson_mesher", "--input_path", str(dense / "fused.ply"),
               "--output_path", str(mesh), "--PoissonMeshing.depth", "10" if quality == "draft" else "11",
               "--PoissonMeshing.trim", "7"], mvs, log, logf)  # color 는 3.9=숫자, 4.x=on/off 라 지정 안 함
-        mesh = prune_mesh(mesh, dense / "fused.ply", mvs / "scene_mesh_pruned.ply", log=log)
+        mesh = prune_mesh(mesh, dense / "fused.ply", mvs / "scene_mesh_pruned.ply", strict=3.0 if strict else None,
+                          log=log)
         if not subject:  # 바닥·벽 평평하게, 모서리 곧게(측정 오차 범위 안에서만)
             from .planes import planarize_mesh
             mesh = planarize_mesh(mesh, dense / "fused.ply", dense / "sparse", mvs / "scene_mesh_planar.ply", log=log)
@@ -320,6 +328,8 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
         _run([_bin("ReconstructMesh"), str(dense_scene),
               "-o", str(mvs / "scene_mesh.mvs")] + common, mvs, log, logf)
         mesh = mvs / "scene_mesh.ply"
+        if strict:  # 측정용: 측정점 사이를 건너 이은 면 제거(텍스처 전에)
+            mesh = prune_mesh(mesh, mvs / "scene_dense.ply", mvs / "scene_mesh_pruned.ply", strict=3.0, log=log)
     if q["refine"] and engine != "colmap":
         try:
             _run([_bin("RefineMesh"), str(dense_scene), "--mesh-file", str(mesh),

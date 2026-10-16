@@ -497,9 +497,17 @@ def georeference(rec: pycolmap.Reconstruction, image_dir: Path, marker_size: flo
             w_, v_ = np.linalg.eigh(np.cov((Cs - Cs.mean(0)).T))
             if w_[0] < 0.05 * w_[2] and w_[1] > 0.05 * w_[2]:
                 n = v_[:, 0]
-                up = n if np.dot(n, up) > 0 else -n
-                report["level_source"] = "camera_plane"
-                log("  수평: 촬영 위치들이 이루는 평면 기준")
+                n = n if np.dot(n, up) > 0 else -n
+                fwd = np.mean([_pose(rec.image(i))[2, :3] for i in rec.reg_image_ids()], 0)
+                nadir = float(np.dot(fwd, -n)) > 0.6  # 대부분 아래를 보고 찍음(드론 격자)
+                # 땅에서 건물을 따라 걸으며 찍으면 촬영 위치 평면이 세로로 설 수 있다(ETH3D delivery_area:
+                # 모델이 옆으로 누워 정사영상에 벽이 찍힘) → 사진 '위' 방향과 35° 안으로 맞을 때만 평면을 쓴다
+                if nadir or float(np.dot(n, up)) > np.cos(np.radians(35)):
+                    up = n
+                    report["level_source"] = "camera_plane"
+                    log("  수평: 촬영 위치들이 이루는 평면 기준")
+                else:
+                    log("  수평: 사진의 위쪽 방향 평균(촬영 위치 평면이 세로로 서 있어 사용 안 함)")
         x = np.cross([0.0, 1.0, 0.0], up) if abs(up[1]) < 0.9 else np.cross([1.0, 0.0, 0.0], up)
         x /= np.linalg.norm(x)
         R = np.stack([x, np.cross(up, x), up])
