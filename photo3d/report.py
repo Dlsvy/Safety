@@ -162,6 +162,22 @@ def write(out: Path, rep: dict, work: Path, log=print) -> Path:
             rm = ", ".join(f"{k} {v:,}" for k, v in cl["removed"].items() if v)
             row("3D 생성", "스플랫 정리(빛 번짐·잡티)", f"{cl['before'] - cl['after']:,}개 제거", INFO, rm or "제거 없음")
 
+    fp = rep.get("floor_patch") or {}
+    if fp.get("area_m2"):
+        row("측량 결과물", "사진 바닥 조각", f"{fp['area_m2']} m²", INFO,
+            "비스듬히 찍혀 측정이 빈 바닥을 사진 정사영상으로 메움(높이는 바닥 평면, 색은 사진) — 바닥 위 물체 높이는 측정 아님")
+    sv = rep.get("survey") or {}
+    oi = sv.get("ortho") or {}
+    if oi.get("m_per_px"):
+        gsd = oi["m_per_px"] * 100
+        row("측량 결과물", "정사영상 해상도", f"{gsd:.1f} cm/px", _lvl(gsd, 2.0, 5.0, False),
+            f"{oi['size_px'][0]}×{oi['size_px'][1]}px · 덮인 비율 {oi['coverage']:.0%} · site_ortho.jpg(+.jgw)")
+        row("측량 결과물", "DSM 높이 범위", f"{oi['z_range_m'][0]:.2f} ~ {oi['z_range_m'][1]:.2f} m", INFO,
+            "site_dsm.tif(높이 m, 빈 곳 -9999) · 보기용 site_dsm_color.png")
+    pt = sv.get("points") or {}
+    if pt.get("points"):
+        row("측량 결과물", "점군", f"{pt['points']:,}점", INFO, "site_points.las — CloudCompare·Civil3D·Revit·ReCap")
+
     gr = rep.get("grade", {})
     counts = {k: sum(1 for r in rows if r[3] == k) for k in (GOOD, WARN, BAD)}
     body = []
@@ -197,6 +213,8 @@ th{{font-weight:500;width:28%}} .v{{font-variant-numeric:tabular-nums;font-weigh
 .st-good b{{background:var(--good)}} .st-warn b{{background:var(--warn);color:#1d1f22}} .st-bad b{{background:var(--bad)}} .st-info b{{background:var(--info)}}
 .map{{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px}}
 .map svg{{width:100%;height:auto;display:block}}
+.ortho{{display:grid;grid-template-columns:1fr 1fr;gap:8px}} .ortho img{{width:100%;height:auto;display:block;border-radius:6px}}
+@media (max-width:620px){{.ortho{{grid-template-columns:1fr}}}}
 .o-good{{fill:var(--good)}} .o-warn{{fill:var(--warn)}} .o-bad{{fill:var(--bad)}}
 .cam circle{{fill:var(--ink);stroke:var(--panel);stroke-width:2}} .cam:hover circle{{r:7}}
 .lg{{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted);margin:6px 2px 0}}
@@ -210,6 +228,7 @@ th{{font-weight:500;width:28%}} .v{{font-variant-numeric:tabular-nums;font-weigh
 <div class="n">좋음 {counts[GOOD]} · 주의 {counts[WARN]} · 나쁨 {counts[BAD]} · 처리 {rep.get('elapsed_min', '?')}분</div></div></div>
 {''.join(body)}
 {f'<h2>겹침 지도 (위에서 본 모습)</h2><div class="map">{svg}{legend}</div>' if svg else ''}
+{'<h2>정사영상 · 높이 지도</h2><div class="map ortho"><img src="site_ortho.jpg" alt="정사영상"><img src="site_dsm_color.png" alt="DSM 높이 지도"></div>' if (out / "site_ortho.jpg").exists() else ''}
 </main></body></html>"""
     p = out / "quality_report.html"
     p.write_text(page, encoding="utf-8")

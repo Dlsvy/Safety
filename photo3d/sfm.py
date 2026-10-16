@@ -68,6 +68,40 @@ def _apply_rig(db: Path, rig: list) -> None:
         pycolmap.apply_rig_config([cfg], database)
 
 
+def gps_pairs(image_dir: Path, out: Path, k: int = 40, min_images: int = 100) -> Path | None:
+    """드론처럼 사진이 많고 GPS 가 있으면: 가까운 사진 k장끼리만 매칭(전수 매칭은 장수² 로 느려짐).
+    ODM·Pix4D 와 같은 방식. 처리용 사진은 다시 저장해 EXIF 가 없으므로 입력 정리 때 읽은 GPS(input_manifest.json)를 쓴다."""
+    import json
+    mf = image_dir.parent / "input_manifest.json"
+    if not mf.exists():
+        return None
+    man = json.loads(mf.read_text(encoding="utf-8"))
+    names = sorted(q.name for q in image_dir.iterdir() if q.is_file())
+    if len(names) < min_images:
+        return None
+    gps = {n: man.get(n, {}).get("gps") for n in names}
+    has = [n for n in names if gps[n]]
+    if len(has) < 0.8 * len(names):
+        return None
+    from scipy.spatial import cKDTree
+    from .scale import lla_to_enu
+    lla = np.array([gps[n] for n in has], float)
+    E = lla_to_enu(lla, lla[0])
+    kk = min(k, len(has) - 1)
+    _, nb = cKDTree(E).query(E, k=kk + 1)
+    pairs = set()
+    for i, row in enumerate(nb):
+        for j in row[1:]:
+            pairs.add(tuple(sorted((has[i], has[int(j)]))))
+    for n in names:  # GPS 없는 사진은 모두와
+        if not gps[n]:
+            for m in names:
+                if m != n:
+                    pairs.add(tuple(sorted((n, m))))
+    out.write_text("".join(f"{a} {b}\n" for a, b in sorted(pairs)), encoding="utf-8")
+    return out
+
+
 def _run_cli(colmap: str, image_dir: Path, work: Path, sequential: bool, single_camera: bool,
              camera_model: str, mapper: str, use_gpu: bool, log, features: str = "sift",
              mask_dir: Path | None = None, max_side: int = 3200,
@@ -124,6 +158,10 @@ def _run_cli(colmap: str, image_dir: Path, work: Path, sequential: bool, single_
     elif sequential:
         run("sequential_matcher", "--database_path", str(db), *mat,
             "--SequentialMatching.overlap", "15", "--SequentialMatching.quadratic_overlap", "1")
+    elif (pl := gps_pairs(image_dir, work / "gps_pairs.txt")) is not None:
+        log(f"  매칭: GPS 가까운 사진끼리({sum(1 for _ in open(pl))}쌍) — 드론·대량 사진용")
+        run("matches_importer", "--database_path", str(db), "--match_list_path", str(pl),
+            "--match_type", "pairs", *mat)
     else:
         run("exhaustive_matcher", "--database_path", str(db), *mat)
     sparse = work / "sparse"
@@ -242,6 +280,12 @@ def run_sfm(image_dir: Path, work: Path, sequential: bool, single_camera: bool =
         so.quadratic_overlap = True
         pycolmap.match_sequential(db, matching_options=mopt, pairing_options=so,
                                   verification_options=tv, device=device)
+    elif (pl := gps_pairs(image_dir, work / "gps_pairs.txt")) is not None:
+        log(f"  매칭: GPS 가까운 사진끼리({sum(1 for _ in open(pl))}쌍) — 드론·대량 사진용")
+        po = pycolmap.ImportedPairingOptions()
+        po.match_list_path = pl
+        pycolmap.match_image_pairs(db, matching_options=mopt, pairing_options=po,
+                                   verification_options=tv, device=device)
     elif n_imgs <= 300:
         log("  매칭: 전수(exhaustive)")
         pycolmap.match_exhaustive(db, matching_options=mopt, verification_options=tv, device=device)
