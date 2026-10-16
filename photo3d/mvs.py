@@ -310,8 +310,8 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
         try:
             import trimesh
             from .texture import bake
-            atlas = {"draft": 8192, "medium": 8192, "high": 8192, "ultra": 8192}[quality]
-            maxf = {"draft": 600_000, "medium": 900_000, "high": 1_200_000, "ultra": 1_500_000}[quality]
+            atlas = {"draft": 4096, "medium": 8192, "high": 8192, "ultra": 8192}[quality]  # 빠르게: 굽기 시간 ↓
+            maxf = {"draft": 250_000, "medium": 900_000, "high": 1_200_000, "ultra": 1_500_000}[quality]
             tm, _ = bake(trimesh.load(colored, process=False), dense / "sparse", dense / "images",
                          atlas=atlas, max_faces=maxf, log=log)
             obj = mvs / "scene_baked.glb"

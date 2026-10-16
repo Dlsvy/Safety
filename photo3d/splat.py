@@ -206,6 +206,8 @@ def start_splat_spirula(dense: Path, exe: str, steps: int = 30000, max_res: int 
         else:
             log("  사람·물체 모드: 사진마다 배경 자동 분리(BiRefNet) 후 대상만 학습")
             steps_ = [lambda: make_subject_masks(exe, data, logf), geo, train]
+    if os.environ.get("PHOTO3D_SPIRULA_GEO") == "0":  # 빠르게: 표면 방향 지도 생략
+        steps_ = [c for c in steps_ if c is not geo]
     proc = _Chain(steps_, work, logf)
     return {"proc": proc, "logf": logf, "work": work, "exp": runs, "steps": steps, "engine": "spirula",
             "subject": subject, "data": data}

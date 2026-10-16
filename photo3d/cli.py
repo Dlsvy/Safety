@@ -58,8 +58,9 @@ def run(a) -> dict:
             os.environ["PHOTO3D_SPIRULA_RES"] = "3200"
         else:  # 빠르게: 더 많이 학습(1만5천 스텝)하되 본 처리 끝난 뒤 최대 5분만 기다리고 마지막 저장본 사용
             os.environ["PHOTO3D_SPIRULA_CAP"] = str(max(1_000_000, cap))
-            os.environ["PHOTO3D_SPIRULA_STEPS"] = "15000"
+            os.environ["PHOTO3D_SPIRULA_STEPS"] = "7000"
             os.environ["PHOTO3D_SPIRULA_SAVE"] = "1000"
+            os.environ["PHOTO3D_SPIRULA_GEO"] = "0"
         os.environ["PHOTO3D_MOGE"] = plan["moge"]
         os.environ["PHOTO3D_MOGE_SIDE"] = str(plan["moge_side"])
         if a.splat_res == 1920:
@@ -204,7 +205,7 @@ def run(a) -> dict:
             from . import splat
             # 빠른 모드: 본 처리가 끝난 뒤 최대 5분만 더 기다리고 중간본 사용(최고 품질은 끝까지)
             rep["splat"] = splat.finish_splat(side["splat"], out, log=log,
-                                              max_wait=300 if a.profile == "fast" else None)
+                                              max_wait=120 if a.profile == "fast" else None)
             rep["splat"]["minutes"] = round((time.time() - side["splat_t0"]) / 60, 1)
         except Exception as e:
             log(f"  스플래팅 실패(메쉬 결과는 정상): {e}")
@@ -339,9 +340,12 @@ def main(argv=None):
         if not a.colmap_bin:
             print("경고: --colmap-bin(CUDA COLMAP)이 없어 특징점·조밀복원은 CPU 로 돈다")
     if a.cmd == "run" and a.profile == "fast":
+        # 빠르게 = 프로토타입(목표 5~10분): 해상도 1600, 구멍 메우기(CPU 별도 처리) 생략, 텍스처 4096,
+        # 스플랫 7천 스텝·표면 방향 지도 생략·본 처리 후 최대 2분 대기
         a.gpu = True
         if a.max_side == 3200:
-            a.max_side = 2400
+            a.max_side = 1600
+        a.fill = False
         if a.max_features == 12000:
             a.max_features = 8000
         if a.quality == "medium":
@@ -353,7 +357,7 @@ def main(argv=None):
         if a.dense == "openmvs" and a.colmap_bin:
             a.dense = "colmap"
     if a.cmd == "run" and a.splat_steps < 0:
-        a.splat_steps = {"fast": 10000, "gpu-max": 30000}.get(a.profile, 0)
+        a.splat_steps = {"fast": 7000, "gpu-max": 30000}.get(a.profile, 0)
     if a.cmd == "run" and not a.inputs and not a.from_colmap:
         ap.error("사진/동영상 입력 또는 --from-colmap 이 필요합니다")
     if a.cmd == "fill-stage":
