@@ -62,6 +62,7 @@ button:focus-visible,.btn:focus-visible,input:focus-visible{outline:2px solid va
 .guide .n{font-size:12px;color:var(--muted);margin:4px 0 0}
 details{margin:6px 0 12px;font-size:13px;color:var(--muted)}
 details input{margin-top:6px;width:100%}
+.subj{display:block;font-size:13px;color:var(--muted);margin:4px 0 10px}.subj strong{color:var(--fg,inherit)}
 .gl{list-style:none;padding:0;margin:8px 0 0;display:grid;gap:6px}
 .gl li{display:grid;grid-template-columns:22px 150px 1fr;gap:8px;align-items:start;color:var(--fg,inherit)}
 .gl .d{font-size:12px;color:var(--muted);grid-column:3}
@@ -171,6 +172,7 @@ details input{margin-top:6px;width:100%}
       <label><input type="radio" name="mode" value="fast" checked><span><strong>빠르게</strong>약 4~6분 · 미리보기</span></label>
       <label><input type="radio" name="mode" value="best"><span><strong>최고 품질</strong>GPU 최대 · 15~30분</span></label>
     </div>
+    <label class="subj"><input type="checkbox" id="subject"> <strong>사람·물체 모드</strong> — 사람·장비·조형물처럼 가운데 대상 하나를 둘러 찍었을 때: 배경을 자동으로 빼고 대상만 선명하게(실사 보기)</label>
     <details class="guide"><summary>촬영 가이드 (현장 안전관리자용)</summary>
       <ol>
         <li>사람·장비가 적은 밝은 시간에 찍으세요. 렌즈를 닦고 배터리·저장공간을 확인합니다.</li>
@@ -337,7 +339,7 @@ $("go").onclick = async () => {
     const sc = $("scale").value.trim();
     const job = await api("/api/jobs", {method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({name: $("name").value || "현장", local_path: $("lpath").value.trim(),
-        scale: sc ? sc + "\n" : null, mode: document.querySelector("input[name=mode]:checked").value, marker_size: parseFloat($("msize").value) || null})});
+        scale: sc ? sc + "\n" : null, mode: document.querySelector("input[name=mode]:checked").value, subject: $("subject").checked, marker_size: parseFloat($("msize").value) || null})});
     const total = picked.reduce((a, f) => a + f.size, 0) || 1; let sent = 0;
     for (const [i, f] of picked.entries()) {
       $("msg").textContent = `올리는 중 ${i + 1}/${picked.length}: ${f.name}`;

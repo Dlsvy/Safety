@@ -385,6 +385,8 @@ def run_job(jid: str) -> None:
         sc = d / "scale.csv"
         sc.write_text(job["scale"], encoding="utf-8")
         cmd += ["--scale-dist", str(sc)]
+    if job.get("subject"):
+        cmd += ["--subject"]
     if job.get("marker_size"):
         cmd += ["--marker-size", str(job["marker_size"])]
     with open(d / "console.log", "w", encoding="utf-8") as f:
@@ -721,7 +723,7 @@ class Handler(BaseHTTPRequestHandler):
                 job = {"id": jid, "name": (b.get("name") or "현장").strip()[:60], "status": "uploading",
                        "created": time.time(), "local_path": lp or None,
                        "scale": b.get("scale") or None, "marker_size": b.get("marker_size") or None,
-                       "mode": "best" if b.get("mode") == "best" else "fast"}
+                       "mode": "best" if b.get("mode") == "best" else "fast", "subject": bool(b.get("subject"))}
                 save_job(job)
                 return self._json(job, 201)
             m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/start", p)

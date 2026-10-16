@@ -133,7 +133,7 @@ def run(a) -> dict:
                 sp_exe = splat.find_spirula(root, log=log) if a.splat_engine in ("auto", "spirula") else None
                 if sp_exe:
                     side["splat"] = splat.start_splat_spirula(dense_dir, sp_exe, steps=a.splat_steps,
-                                                              max_res=a.splat_res, log=log)
+                                                              max_res=a.splat_res, log=log, subject=a.subject)
                     eng = "Spirula"
                 else:
                     brush = splat.find_brush(root, log=log)
@@ -295,6 +295,8 @@ def main(argv=None):
                    help="가우시안 스플래팅 학습 스텝(0=끔). 기본: fast 7000 / gpu-max 30000 / 그 외 끔")
     r.add_argument("--no-prior", dest="prior", action="store_false",
                    help="깊이 prior(MoGe-2)로 무늬 없는 벽·바닥 채우기 끄기 (기본: GPU 경로에서 켬)")
+    r.add_argument("--subject", action="store_true",
+                   help="사람·물체 모드: 사진마다 배경을 자동으로 빼고(BiRefNet) 대상만 스플랫 학습·자르기")
     r.add_argument("--splat-engine", choices=["auto", "spirula", "brush"],
                    default=os.environ.get("PHOTO3D_SPLAT_ENGINE", "auto"),
                    help="스플랫 학습 프로그램: auto(Spirula 가 있으면 Spirula, 없으면 Brush)")

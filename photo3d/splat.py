@@ -75,6 +75,12 @@ class _Chain:
         for c in self.cmds:
             if self.stop:
                 break
+            if callable(c):  # 파이썬 단계(예: 배경 분리 마스크 만들기)
+                try:
+                    c()
+                except Exception as e:
+                    self.logf.write(f"단계 실패: {e}\n")
+                continue
             self.logf.write("$ " + " ".join(c) + "\n")
             self.logf.flush()
             self.cur = subprocess.Popen(c, cwd=self.cwd, stdout=self.logf, stderr=subprocess.STDOUT)
@@ -101,7 +107,62 @@ class _Chain:
             self.cur.kill()
 
 
-def start_splat_spirula(dense: Path, exe: str, steps: int = 30000, max_res: int = 1920, log=print) -> dict:
+def make_subject_masks(exe: str, data: Path, logf, model: str = "birefnet") -> int:
+    """사람·물체 모드: 사진마다 주인공(가장 눈에 띄는 대상)을 자동으로 찾아 마스크(흰색=대상)를 만든다.
+    BiRefNet(MIT) — Spirula 'sam segment' 로 실행. 결과: data/masks/<사진이름(확장자 제외)>.png (Spirula·Brush 공용)."""
+    masks = data / "masks"
+    masks.mkdir(exist_ok=True)
+    tmp = data.parent / "mask_tmp"
+    imgs = sorted(q for q in (data / "images").iterdir() if q.suffix.lower() in (".jpg", ".jpeg", ".png"))
+    n = 0
+    for k, im in enumerate(imgs):
+        shutil.rmtree(tmp, ignore_errors=True)
+        for mdl in (model, "birefnet-lite"):
+            r = subprocess.run([exe, "sam", "segment", "--model", mdl, "--accept-license", "birefnet=yes",
+                                "--image", str(im), "--out", str(tmp)], stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+            if r.returncode == 0 and (tmp / "seg_mask.png").exists():
+                shutil.move(str(tmp / "seg_mask.png"), str(masks / f"{im.stem}.png"))
+                n += 1
+                break
+        logf.write(f"배경 분리 {k + 1}/{len(imgs)}\n")
+        logf.flush()
+    shutil.rmtree(tmp, ignore_errors=True)
+    logf.write(f"배경 분리 완료: {n}/{len(imgs)}장\n")
+    return n
+
+
+def subject_points(dense: Path, masks: Path, min_ratio: float = 0.6) -> np.ndarray | None:
+    """조밀 점 중 '보이는 사진의 60% 이상에서 마스크 안'인 점 = 대상 점(스플랫 자르기 기준)."""
+    import cv2
+    import pycolmap
+    from .fill import read_points
+    xyz = np.asarray(read_points(dense / "fused.ply")[0], float)
+    r = pycolmap.Reconstruction(dense / "sparse")
+    inside = np.zeros(len(xyz), np.int32)
+    seen = np.zeros(len(xyz), np.int32)
+    for i in r.reg_image_ids():
+        im = r.image(i)
+        mp = masks / f"{Path(im.name).stem}.png"
+        if not mp.exists():
+            continue
+        m = cv2.imread(str(mp), cv2.IMREAD_GRAYSCALE)
+        cam = r.camera(im.camera_id)
+        T = im.cam_from_world() if callable(im.cam_from_world) else im.cam_from_world
+        pc = xyz @ T.rotation.matrix().T + T.translation
+        ok = pc[:, 2] > 0
+        uv = np.zeros((len(xyz), 2))
+        uv[ok] = np.asarray(cam.img_from_cam(pc[ok]))[:, :2]
+        sx, sy = m.shape[1] / cam.width, m.shape[0] / cam.height
+        u, v = (uv[:, 0] * sx).astype(int), (uv[:, 1] * sy).astype(int)
+        ok &= (u >= 0) & (v >= 0) & (u < m.shape[1]) & (v < m.shape[0])
+        seen[ok] += 1
+        inside[np.where(ok)[0][m[v[ok], u[ok]] > 127]] += 1
+    keep = (seen >= 2) & (inside >= min_ratio * np.maximum(seen, 1))
+    return xyz[keep] if keep.sum() > 500 else None
+
+
+def start_splat_spirula(dense: Path, exe: str, steps: int = 30000, max_res: int = 1920, log=print,
+                        subject: bool = False) -> dict:
     """Spirula 학습을 백그라운드로: ① 표면 방향 지도(MoGe-2, MIT) ② 학습(노출 보정·잡티 억제·조밀 점 시작)."""
     import math
     work = dense.parent / "splat"
@@ -127,14 +188,19 @@ def start_splat_spirula(dense: Path, exe: str, steps: int = 30000, max_res: int 
     cap = os.environ.get("PHOTO3D_MAX_SPLATS", "3000000")
     runs = work / "runs"
     geo = [exe, "geometry", str(data), "--max-size", "1064", "--normal-format", "jpg"]
-    train = [exe, "train", "3dgs", "--data", str(data), "--num-iterations", str(steps), "--disable-viewer", "1",
+    train = [exe, "train", "centered-object" if subject else "3dgs", "--data", str(data), "--num-iterations", str(steps), "--disable-viewer", "1",
              "--scene-center", "none", "--seed-pointcloud", "init.ply", "--cap-max", cap,
              "--floater-suppression", "mild", "--train-resolution-divisor", str(div),
              "--output-dir-prefix", str(runs), "--output-dir-name", "run"]
     log(f"  $ spirula train --total-steps {steps} (표면 방향 지도 → 학습, 해상도 1/{div}, 최대 {int(cap):,}개, 백그라운드 GPU)")
     logf = open(work / "brush.log", "w", encoding="utf-8", errors="replace")  # 진행 표시가 같은 파일을 읽음
-    proc = _Chain([geo, train], work, logf)
-    return {"proc": proc, "logf": logf, "work": work, "exp": runs, "steps": steps, "engine": "spirula"}
+    steps_ = [geo, train]
+    if subject:  # 사람·물체 모드: 배경 분리 마스크 → 대상만 학습(centered-object), 배경은 빈 공간으로
+        log("  사람·물체 모드: 사진마다 배경 자동 분리(BiRefNet) 후 대상만 학습")
+        steps_ = [lambda: make_subject_masks(exe, data, logf), geo, train]
+    proc = _Chain(steps_, work, logf)
+    return {"proc": proc, "logf": logf, "work": work, "exp": runs, "steps": steps, "engine": "spirula",
+            "subject": subject, "data": data}
 
 
 def find_brush(root: Path, download: bool = True, log=print) -> str | None:
@@ -320,7 +386,16 @@ def finish_splat(h: dict, out: Path, log=print, max_wait: float | None = None) -
             cams = np.array([r.image(i).projection_center() for i in r.reg_image_ids()])
         except Exception:
             pass
-        clean = clean_file(raw, dense_ply, dst, cams, log=log) if dense_ply.exists() else None
+        support = dense_ply
+        if h.get("subject") and dense_ply.exists():
+            pts = subject_points(dense_ply.parent, h["data"] / "masks")
+            if pts is not None:
+                from .fill import _write_ply
+                support = h["work"] / "subject_points.ply"
+                _write_ply(support, pts, np.zeros_like(pts), np.full((len(pts), 3), 200, np.uint8))
+                log(f"  대상 점 {len(pts):,}개 기준으로 배경 잘라냄")
+                cams = None  # 카메라 위치까지 범위에 넣지 않음(대상만)
+        clean = clean_file(raw, support, dst, cams, log=log) if dense_ply.exists() else None
     except Exception as e:
         log(f"  스플랫 정리 생략: {e}")
     if clean is None:
