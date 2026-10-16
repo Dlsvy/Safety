@@ -151,17 +151,26 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
         log(f"  텍스처 실패 → 정점 색 메쉬로 대체: {e}")
     obj = mvs / "scene_textured.ply"
     if obj.exists():
-        # 사진을 못 읽으면 TextureMesh 가 검은 아틀라스를 만든다(PC v2.4 에서 확인) → 밝기로 판정해 대체
+        # Windows OpenMVS v2.4 는 사진을 못 읽어 검은 텍스처를 만들었다(PC 3회). 아틀라스 평균은 여백·경계색 때문에
+        # 판정이 안 되므로, 면에 실제로 입혀진 색의 밝기를 원본 점군 색과 비교한다.
         try:
-            from PIL import Image
             import numpy as np
-            pngs = sorted(mvs.glob("scene_textured*.png"))
-            if pngs:
-                im = np.asarray(Image.open(pngs[0]).convert("L").resize((256, 256)))
-                bright = float(im.mean())
-                log(f"  텍스처 평균 밝기 {bright:.0f}/255")
-                if bright < 20 and mesh.exists():
-                    log("  경고: 텍스처가 거의 검음(사진 로딩 실패 의심) → 점군 색 메쉬로 대체")
+            import trimesh
+            from .export import load_openmvs_textured_ply
+            tm = load_openmvs_textured_ply(obj)
+            pc = trimesh.load(dense / "fused.ply", process=False) if (dense / "fused.ply").exists() else None
+            if tm is not None and pc is not None:
+                img = np.asarray(tm.visual.material.image)
+                uv = tm.visual.uv.reshape(-1, 3, 2).mean(1)
+                h, w = img.shape[:2]
+                sel = np.random.default_rng(0).choice(len(uv), min(200000, len(uv)), replace=False)
+                px = img[np.clip(((1 - uv[sel, 1]) * h).astype(int), 0, h - 1),
+                         np.clip((uv[sel, 0] * w).astype(int), 0, w - 1)][:, :3].astype(float)
+                pcol = np.asarray(getattr(pc, "colors", pc.visual.vertex_colors))[:, :3].astype(float)
+                tex_l, pt_l = float(px.mean()), float(pcol.mean())
+                log(f"  텍스처 밝기 {tex_l:.0f} / 점군 밝기 {pt_l:.0f}")
+                if tex_l < 0.5 * pt_l:
+                    log("  경고: 텍스처가 사진보다 훨씬 어두움(사진 읽기 실패 의심) → 점군 색 메쉬로 대체")
                     obj = _color_from_points(mesh, dense / "fused.ply", mvs, log)
         except Exception as e:
             log(f"  텍스처 점검 생략: {e}")

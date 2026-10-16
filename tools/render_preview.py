@@ -16,12 +16,26 @@ NV = int(argv[2]) if len(argv) > 2 else 3
 ELEV = float(argv[3]) if len(argv) > 3 else 25.0
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
-bpy.ops.wm.obj_import(filepath=MESH, forward_axis="Y", up_axis="Z")
+if MESH.lower().endswith(".ply"):
+    bpy.ops.wm.ply_import(filepath=MESH, forward_axis="Y", up_axis="Z")
+else:
+    bpy.ops.wm.obj_import(filepath=MESH, forward_axis="Y", up_axis="Z")
 objs = [o for o in bpy.context.scene.objects if o.type == "MESH"]
 for o in objs:
+    if not o.material_slots and o.data.color_attributes:  # 정점 색 메쉬
+        m = bpy.data.materials.new("vcol")
+        m.use_nodes = True
+        nt = m.node_tree
+        out = next(n for n in nt.nodes if n.type == "OUTPUT_MATERIAL")
+        em = nt.nodes.new("ShaderNodeEmission")
+        ca = nt.nodes.new("ShaderNodeVertexColor")
+        ca.layer_name = o.data.color_attributes[0].name
+        nt.links.new(ca.outputs["Color"], em.inputs["Color"])
+        nt.links.new(em.outputs[0], out.inputs[0])
+        o.data.materials.append(m)
     for slot in o.material_slots:
         m = slot.material
-        if not m or not m.use_nodes:
+        if not m or not m.use_nodes or m.name.startswith("vcol"):
             continue
         nt = m.node_tree
         tex = next((n for n in nt.nodes if n.type == "TEX_IMAGE"), None)
