@@ -100,7 +100,7 @@ def prune_mesh(mesh_path: Path, points_path: Path, dst: Path, log=print) -> Path
         d, _ = tree.query(m.triangles_center, workers=-1)
         el = np.linalg.norm(m.vertices[m.faces] - m.vertices[np.roll(m.faces, 1, 1)], axis=2).max(1)
         thin = el ** 2 / np.maximum(2 * m.area_faces, 1e-12)
-        far = d > 6 * sp
+        far = d > 20 * sp  # 가시는 수십~수백 배 떨어져 있다(6배는 점이 성긴 실제 표면까지 지움)
         needle = (thin > 12) & (el > 8 * np.median(el))
         n0 = len(m.faces)
         m.update_faces(~(far | needle))
@@ -196,6 +196,23 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
                 mesh = mvs / "scene_refined.ply"
         except RuntimeError as e:
             log(f"  메쉬 정제 건너뜀: {e}")
+    if engine == "colmap":
+        # Windows OpenMVS TextureMesh 는 검은 텍스처(PC 3회) → 직접 구현한 사진 텍스처 굽기 사용
+        colored = _color_from_points(mesh, dense / "fused.ply", mvs, log)
+        try:
+            import trimesh
+            from .texture import bake
+            atlas = {"draft": 8192, "medium": 8192, "high": 8192, "ultra": 8192}[quality]
+            maxf = {"draft": 600_000, "medium": 900_000, "high": 1_200_000, "ultra": 1_500_000}[quality]
+            tm, _ = bake(trimesh.load(colored, process=False), dense / "sparse", dense / "images",
+                         atlas=atlas, max_faces=maxf, log=log)
+            obj = mvs / "scene_baked.glb"
+            tm.export(obj)
+        except Exception as e:
+            log(f"  사진 텍스처 굽기 실패 → 점군 색 메쉬 사용: {e}")
+            obj = colored
+        ply = mvs / "scene_dense.ply"
+        return {"textured_obj": obj, "dense_ply": ply if ply.exists() else None, "log": logf}
     try:
         _run([_bin("TextureMesh"), str(dense_scene), "--mesh-file", str(mesh), "--export-type", "ply",  # v2.3 SaveOBJ 세그폴트 → PLY(+png)
               "--empty-color", "8421504",  # 어느 사진에도 안 보인 면은 회색(기본 주황)

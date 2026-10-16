@@ -88,9 +88,25 @@ def run(a) -> dict:
             fr = fill.fill_holes(res["dense_ply"], out, cams if not geo["method"].startswith("none") else None,
                                  log=log)
             m, est = fr["mesh"], fr["estimated_mask"]
+            if (work / "dense" / "sparse").exists() and (work / "dense" / "images").exists() and a.dense == "colmap":
+                try:  # 측정된 면은 사진 텍스처, 메운 면은 주변 실제 색 유지
+                    from .texture import bake
+                    est_only = est.copy()
+                    est_m = m.submesh([np.where(est)[0]], append=True) if est.any() else None
+                    m, _ = bake(m, work / "dense" / "sparse", work / "dense" / "images", atlas=8192,
+                                max_faces=len(m.faces) + 1, vertex_only=est_only, log=log)
+                except Exception as e:
+                    log(f"  메운 모델 사진 텍스처 생략: {e}")
+                    est_m = None
+            else:
+                est_m = None
             m.apply_transform(export.ZUP_TO_YUP)
             m.export(out / "site_filled.glb")  # 보기용: 구멍 없이 이어진 전체(색 포함)
-            est_mesh = m.submesh([np.where(est)[0]], append=True) if est.any() else None
+            if est_m is not None:
+                est_m.apply_transform(export.ZUP_TO_YUP)
+                est_mesh = est_m
+            else:
+                est_mesh = m.submesh([np.where(est)[0]], append=True) if est.any() else None
             if est_mesh is not None:
                 est_mesh.export(out / "site_estimated.glb")  # 유니티: SiteEstimated 레이어로 경고
             rep["fill"] = {"estimated_area_ratio": fr["estimated_area_ratio"], "filled": "site_filled.glb",
