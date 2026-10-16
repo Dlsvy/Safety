@@ -113,9 +113,34 @@ def prune_mesh(mesh_path: Path, points_path: Path, dst: Path, log=print) -> Path
         return mesh_path
 
 
+def add_prior_points(fused: Path, dense: Path, log=print) -> int:
+    """조밀 점군(fused.ply)에 깊이 prior 로 채운 점을 더해 같은 파일로 저장. 실패해도 원래 점군 유지."""
+    try:
+        from . import priorfill
+        from .fill import _write_ply, read_points
+        if not priorfill.ensure_installed(log):
+            log("  깊이 prior 설치 실패 → 건너뜀")
+            return 0
+        xyz, nrm, rgb = read_points(fused)
+        pr = priorfill.fill(xyz, rgb, dense / "sparse", dense / "images", log=log)
+        n = len(pr["xyz"])
+        if n:
+            if nrm is None:
+                nrm = np.zeros_like(xyz)
+            _write_ply(fused, np.vstack([xyz, pr["xyz"]]), np.vstack([nrm, pr["normal"]]),
+                       np.vstack([rgb if rgb is not None else np.full((len(xyz), 3), 160, np.uint8), pr["rgb"]]))
+            from .pointfilter import LAST
+            LAST["prior_added"] = int(n)
+        return n
+    except Exception as e:
+        log(f"  깊이 prior 생략: {e}")
+        return 0
+
+
 def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
                      quality: str = "medium", threads: int = 0, engine: str = "openmvs",
-                     colmap_bin: str | None = None, on_dense_ready=None, log=print) -> dict:
+                     colmap_bin: str | None = None, on_dense_ready=None, prior: bool = True,
+                     log=print) -> dict:
     q = QUALITY[quality]
     sparse = work / "sparse_georef"
     if sparse.exists():
@@ -166,6 +191,8 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
         if fused.name != "fused.ply":
             shutil.copy2(fused, dense / "fused.ply")
             fused = dense / "fused.ply"
+        if prior:  # 무늬 없는 벽·바닥 채우기(MoGe-2 깊이 prior, 측정과 맞춘 뒤 다시점 일치만)
+            add_prior_points(fused, dense, log)
         # (OpenMVS 장면 변환은 이 경로에서 쓰지 않음 — 시간 절약)
         shutil.copy2(fused, mvs / "scene_dense.ply")
         if on_dense_ready:  # 점군 완성 → 메운 모델(CPU 별도 프로세스)·스플랫(GPU)을 지금 동시에 시작

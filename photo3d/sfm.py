@@ -322,6 +322,10 @@ def _finish(recs: dict, n_imgs: int, log, refine_pp: bool = False,
             robust: bool = True, min_img_points: int = 60) -> tuple[pycolmap.Reconstruction, dict]:
     # 가장 큰 모델 선택
     rec = max(recs.values(), key=lambda r: r.num_reg_images())
+    # 실내·무늬 적은 현장은 사진당 점 수 자체가 적다 → 기준을 전체 평균의 15% 로 완화(최대 min_img_points)
+    if robust and rec.num_reg_images():
+        avg = float(np.mean([rec.image(i).num_points3D for i in rec.reg_image_ids()]))
+        min_img_points = int(min(min_img_points, max(15, 0.15 * avg)))
     rejected = reject_bad_images(rec, min_points=min_img_points, log=log) if robust else []
     # 최종 전체 BA (렌즈 파라미터 포함)
     ba = pycolmap.BundleAdjustmentOptions()

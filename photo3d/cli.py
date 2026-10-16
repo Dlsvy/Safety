@@ -115,7 +115,7 @@ def run(a) -> dict:
                 log(f"  스플래팅 시작 실패(메쉬 결과는 정상): {e}")
 
     res = mvs.densify_and_mesh(rec, img_dir, work, quality=a.quality, engine=a.dense,
-                               colmap_bin=a.colmap_bin, on_dense_ready=on_dense_ready, log=log)
+                               colmap_bin=a.colmap_bin, on_dense_ready=on_dense_ready, prior=a.prior, log=log)
     if a.fill and "fill" not in side and res.get("dense_ply"):  # CPU(OpenMVS) 경로: 콜백 없음 → 지금 시작
         on_dense_ready(work / "dense", res["dense_ply"])
 
@@ -257,6 +257,8 @@ def main(argv=None):
     r.add_argument("--fill", action="store_true", default=True, help=argparse.SUPPRESS)
     r.add_argument("--splat-steps", type=int, default=-1,
                    help="가우시안 스플래팅 학습 스텝(0=끔). 기본: fast 7000 / gpu-max 30000 / 그 외 끔")
+    r.add_argument("--no-prior", dest="prior", action="store_false",
+                   help="깊이 prior(MoGe-2)로 무늬 없는 벽·바닥 채우기 끄기 (기본: GPU 경로에서 켬)")
     r.add_argument("--splat-res", type=int, default=1920, help="스플래팅 학습 이미지 최대 변 길이(px)")
     r.add_argument("--masks", help="마스크 폴더(<이미지명>.png, 검정=제외) — 움직이는 사람·장비 제거")
     r.add_argument("--gpu", action="store_true", help="CUDA 지원 COLMAP 일 때 GPU 사용")

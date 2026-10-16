@@ -23,7 +23,13 @@ def sharpness(path: Path, max_side: int = 1024) -> float:
     s = max_side / max(img.shape)
     if s < 1:
         img = cv2.resize(img, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
-    return float(cv2.Laplacian(img, cv2.CV_64F).var())
+    # 무늬가 있는 부분만으로 판정: 화면을 8×8 칸으로 나눠 가장자리(라플라시안) 변화가 큰 상위 25% 칸의 평균.
+    # 흰 벽·천장이 대부분인 실내 사진이 '흔들림'으로 잘못 버려지던 문제(ETH3D office 26장 중 5장) 수정
+    lap = cv2.Laplacian(img, cv2.CV_64F)
+    h, w = lap.shape
+    tiles = [lap[i * h // 8:(i + 1) * h // 8, j * w // 8:(j + 1) * w // 8].var() for i in range(8) for j in range(8)]
+    tiles = np.sort(tiles)[::-1]
+    return float(tiles[:16].mean())
 
 
 _DET = None
@@ -262,7 +268,8 @@ def prepare_inputs(inputs: list[Path], out_dir: Path, max_side: int = 3200,
         med = float(np.median(list(scores.values())))
         for k, p in enumerate(photos):
             # 바닥만 찍힌 마커 근접 사진은 질감이 적어 '흐림'으로 오판되기 쉽다 → 마커가 보이면 항상 유지
-            if scores[p] < 0.2 * med and not _has_marker(p):
+            # 직접 찍은 사진은 극단적으로 흐린 것만 뺀다(무늬 없는 흰 벽 사진은 선명해도 점수가 낮음 — 실내 필수 사진)
+            if scores[p] < 0.05 * med and not _has_marker(p):
                 blurry.append(p.name)
                 continue
             dst = out_dir / f"p_{k:05d}_{p.stem}"
