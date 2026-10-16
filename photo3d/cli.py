@@ -98,6 +98,19 @@ def run(a) -> dict:
                            "note": "추정 영역은 측정값이 아님 — 높은 위치/드론 사진 추가 또는 도면 3D 결합으로 대체 권장"}
         except Exception as e:
             log(f"  구멍 메우기 실패: {e}")
+    if a.splat_steps > 0 and (work / "dense" / "sparse").exists():
+        from . import splat
+        log(f"  가우시안 스플래팅(GPU, Brush {a.splat_steps}스텝) — 사진처럼 부드러운 보기용")
+        try:
+            brush = splat.find_brush(Path(__file__).resolve().parents[1], log=log)
+            if not brush:
+                raise RuntimeError("Brush 실행파일 없음")
+            ts = time.time()
+            rep["splat"] = splat.train_splat(work / "dense", out, brush, steps=a.splat_steps,
+                                             max_res=a.splat_res, log=log)
+            rep["splat"]["minutes"] = round((time.time() - ts) / 60, 1)
+        except Exception as e:
+            log(f"  스플래팅 실패(메쉬 결과는 정상): {e}")
     rep["elapsed_min"] = round((time.time() - t0) / 60, 1)
     rep["grade"] = grade(rep)
     with open(out / "report.json", "w", encoding="utf-8") as f:
@@ -180,6 +193,9 @@ def main(argv=None):
     r.add_argument("--no-fill", dest="fill", action="store_false",
                    help="구멍 메우기 끄기(기본: 주변 형상으로 메운 site_filled.glb + 추정 영역 site_estimated.glb 생성)")
     r.add_argument("--fill", action="store_true", default=True, help=argparse.SUPPRESS)
+    r.add_argument("--splat-steps", type=int, default=-1,
+                   help="가우시안 스플래팅 학습 스텝(0=끔). 기본: fast 7000 / gpu-max 30000 / 그 외 끔")
+    r.add_argument("--splat-res", type=int, default=1920, help="스플래팅 학습 이미지 최대 변 길이(px)")
     r.add_argument("--masks", help="마스크 폴더(<이미지명>.png, 검정=제외) — 움직이는 사람·장비 제거")
     r.add_argument("--gpu", action="store_true", help="CUDA 지원 COLMAP 일 때 GPU 사용")
     r.add_argument("--colmap-bin", default=os.environ.get("COLMAP_BIN"),
@@ -218,6 +234,8 @@ def main(argv=None):
         # RTX 50(SM 12.0)에서 GPU 계산 시작 시 종료(PC 확인) → 메쉬·텍스처만 OpenMVS(CPU판)
         if a.dense == "openmvs" and a.colmap_bin:
             a.dense = "colmap"
+    if a.cmd == "run" and a.splat_steps < 0:
+        a.splat_steps = {"fast": 7000, "gpu-max": 30000}.get(a.profile, 0)
     if a.cmd == "run" and not a.inputs and not a.from_colmap:
         ap.error("사진/동영상 입력 또는 --from-colmap 이 필요합니다")
     if a.cmd == "run":

@@ -92,6 +92,7 @@ def job_view(job: dict) -> dict:
     v["has_model"] = (d / "out" / "site_model.glb").exists()
     v["has_filled"] = (d / "out" / "site_filled.glb").exists()
     v["has_est"] = (d / "out" / "site_estimated.glb").exists()
+    v["has_splat"] = (d / "out" / "site_splat.ply").exists()
     v["files"] = len([p for p in (d / "input").iterdir()]) if (d / "input").exists() else 0
     return v
 
@@ -122,7 +123,8 @@ def run_job(jid: str) -> None:
         env["OPENMVS_BIN"] = tools["openmvs"]
     env["PYTHONIOENCODING"] = "utf-8"
     src = job.get("local_path") or str(d / "input")
-    cmd = [sys.executable, "-m", "photo3d", "run", src, "--profile", "fast", "--out", str(d / "out")]
+    profile = "gpu-max" if job.get("mode") == "best" else "fast"
+    cmd = [sys.executable, "-m", "photo3d", "run", src, "--profile", profile, "--out", str(d / "out")]
     if tools["colmap"]:
         cmd += ["--colmap-bin", tools["colmap"]]
     if job.get("scale"):
@@ -225,7 +227,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"error": f"PC 에 없는 경로: {lp}"}, 400)
                 job = {"id": jid, "name": (b.get("name") or "현장").strip()[:60], "status": "uploading",
                        "created": time.time(), "local_path": lp or None,
-                       "scale": b.get("scale") or None, "marker_size": b.get("marker_size") or None}
+                       "scale": b.get("scale") or None, "marker_size": b.get("marker_size") or None,
+                       "mode": "best" if b.get("mode") == "best" else "fast"}
                 save_job(job)
                 return self._json(job, 201)
             m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/start", p)

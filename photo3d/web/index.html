@@ -42,6 +42,11 @@ button:focus-visible,.btn:focus-visible,input:focus-visible{outline:2px solid va
 .pick label strong{display:block;color:var(--ink);font-size:15px}
 .pick input{display:none}
 .chosen{font-size:13px;color:var(--muted);margin:4px 0 10px}
+.mode{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:0 0 10px}
+.mode label{border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;font-size:13px;color:var(--muted);display:flex;gap:8px;align-items:flex-start}
+.mode label strong{display:block;color:var(--ink);font-size:14px}
+.mode label:has(input:checked){border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.mode input{accent-color:var(--accent);margin-top:3px}
 details{margin:6px 0 12px;font-size:13px;color:var(--muted)}
 details input{margin-top:6px;width:100%}
 .bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:10px}
@@ -99,6 +104,10 @@ details input{margin-top:6px;width:100%}
       <input id="cam" type="file" accept="image/*,video/*" capture="environment" multiple>
     </div>
     <div class="chosen" id="chosen">선택한 파일 없음 · 한쪽 면은 5~6장, 한 바퀴는 15~20장, 또는 1~2분 영상</div>
+    <div class="mode" role="radiogroup" aria-label="품질">
+      <label><input type="radio" name="mode" value="fast" checked><span><strong>빠르게</strong>약 4~6분 · 미리보기</span></label>
+      <label><input type="radio" name="mode" value="best"><span><strong>최고 품질</strong>GPU 최대 · 15~30분</span></label>
+    </div>
     <details><summary>PC 에 있는 폴더로 만들기 / 실측 크기 맞추기</summary>
       <input id="lpath" type="text" placeholder="PC 폴더 경로 (예: C:\photo3d\data\strecha\Benchmarking_Camera_Calibration_2008\castle-P30\images)">
       <input id="scale" type="text" placeholder="줄자 거리: 마커ID1,마커ID2,거리m (예: 0,3,10.25)">
@@ -117,6 +126,7 @@ details input{margin-top:6px;width:100%}
   <canvas id="cv"></canvas>
   <div class="vbar">
     <span class="t" id="vt"></span>
+    <button id="splatb" aria-pressed="false" hidden>실사 보기</button>
     <button id="fillb" aria-pressed="false" hidden>구멍 메움</button>
     <button id="estb" aria-pressed="false" hidden>메운 곳 표시</button>
     <button id="measure" aria-pressed="false">거리 재기</button>
@@ -128,7 +138,7 @@ details input{margin-top:6px;width:100%}
 
 <script type="importmap">
 {"imports":{"three":"/vendor/three.module.js",
- "three/addons/":"/vendor/addons/"}}
+ "three/addons/":"/vendor/addons/", "gsplat3d":"/vendor/gs/gaussian-splats-3d.module.js"}}
 </script>
 <script type="module">
 // 3D 라이브러리는 '3D 보기'를 누를 때 불러온다 — 인터넷이 막혀도 목록·업로드는 동작
@@ -163,7 +173,7 @@ $("go").onclick = async () => {
     const sc = $("scale").value.trim();
     const job = await api("/api/jobs", {method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({name: $("name").value || "현장", local_path: $("lpath").value.trim(),
-        scale: sc ? sc + "\n" : null, marker_size: parseFloat($("msize").value) || null})});
+        scale: sc ? sc + "\n" : null, mode: document.querySelector("input[name=mode]:checked").value, marker_size: parseFloat($("msize").value) || null})});
     const total = picked.reduce((a, f) => a + f.size, 0) || 1; let sent = 0;
     for (const [i, f] of picked.entries()) {
       $("msg").textContent = `올리는 중 ${i + 1}/${picked.length}: ${f.name}`;
@@ -264,31 +274,57 @@ async function openViewer(j) {
   resize();
   $("vt").textContent = j.name; $("dl").href = `/files/${j.id}/site_model.glb`;
   $("dl").setAttribute("download", `${j.name}.glb`);
-  useFill = !!j.has_filled; showEst = false;
-  $("fillb").hidden = !j.has_filled; $("estb").hidden = !j.has_est;
+  useFill = !!j.has_filled; showEst = false; useSplat = !!j.has_splat;
+  $("fillb").hidden = !j.has_filled; $("estb").hidden = !j.has_est; $("splatb").hidden = !j.has_splat;
   syncToggles(); loadModel(true);
 }
-let useFill = false, showEst = false, estModel = null;
+let useFill = false, showEst = false, estModel = null, useSplat = false, splatView = null;
 function syncToggles(){
+  $("splatb").classList.toggle("on", useSplat); $("splatb").setAttribute("aria-pressed", useSplat);
+  $("fillb").disabled = useSplat; $("measure").disabled = useSplat;
   $("fillb").classList.toggle("on", useFill); $("fillb").setAttribute("aria-pressed", useFill);
   $("estb").classList.toggle("on", showEst); $("estb").setAttribute("aria-pressed", showEst);
-  $("estb").disabled = !useFill;
+  $("estb").disabled = !useFill || useSplat;
 }
 function basic(root){ root.traverse((o) => { if (o.isMesh) {   // 조명 없이 사진 색 그대로
   const m = o.material; o.material = new THREE.MeshBasicMaterial({map: m.map || null,
     vertexColors: !!o.geometry.attributes.color, side: THREE.DoubleSide}); } }); }
-function loadModel(frame) {
+async function clearScene() {
+  if (model) { scene.remove(model); model = null; } if (estModel) { scene.remove(estModel); estModel = null; }
+  if (splatView) { scene.remove(splatView); try { await splatView.dispose(); } catch (e) {} splatView = null; }
+  clearMarks();
+}
+async function loadSplat(frame) {
+  await clearScene();
+  $("vinfo").textContent = "실사(가우시안 스플래팅) 불러오는 중… 큰 파일은 수십 초 걸립니다";
+  try {
+    const GS = await import("gsplat3d");
+    splatView = new GS.DropInViewer({sharedMemoryForWorkers: false, gpuAcceleratedSort: false, dynamicScene: false});
+    // 스플랫은 Z-up(측량 좌표), 메쉬 GLB 는 Y-up → X축 -90° 회전으로 맞춘다
+    await splatView.addSplatScene(`/files/${curJob.id}/site_splat.ply`,
+      {rotation: [-Math.SQRT1_2, 0, 0, Math.SQRT1_2], showLoadingUI: false, splatAlphaRemovalThreshold: 5,
+       format: GS.SceneFormat.Ply});
+    scene.add(splatView);
+    if (frame) await frameFrom("site_model.glb");
+    $("vinfo").textContent = "실사 보기(가우시안 스플래팅) · 거리 재기는 '실사 보기'를 끄고 메쉬에서";
+  } catch (e) { console.error(e); $("vinfo").textContent = "실사 파일을 불러오지 못했습니다 → 메쉬로 봅니다"; useSplat = false; syncToggles(); loadModel(frame); }
+}
+function frameFrom(file) {   // 카메라 위치는 메쉬 범위로 잡는다
+  return new Promise((res) => new GLTFLoader().load(`/files/${curJob.id}/${file}`, (g) => { frameBox(new THREE.Box3().setFromObject(g.scene)); res(); }, undefined, () => res()));
+}
+function frameBox(box) {
+  const c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3()).length();
+  controls.target.copy(c); camera.position.copy(c).add(new THREE.Vector3(0, s * 0.25, s * 0.75));
+  camera.near = s / 1000; camera.far = s * 20; camera.updateProjectionMatrix();
+}
+async function loadModel(frame) {
+  if (useSplat) return loadSplat(frame);
   const j = curJob, file = useFill ? "site_filled.glb" : "site_model.glb";
   $("vinfo").textContent = "불러오는 중…";
-  if (model) { scene.remove(model); model = null; } if (estModel) { scene.remove(estModel); estModel = null; }
-  clearMarks();
+  await clearScene();
   new GLTFLoader().load(`/files/${j.id}/${file}`, (g) => {
     model = g.scene; basic(model); scene.add(model);
-    if (frame) {
-      const box = new THREE.Box3().setFromObject(model), c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3()).length();
-      controls.target.copy(c); camera.position.copy(c).add(new THREE.Vector3(0, s * 0.25, s * 0.75));
-      camera.near = s / 1000; camera.far = s * 20; camera.updateProjectionMatrix();
-    }
+    if (frame) frameBox(new THREE.Box3().setFromObject(model));
     $("vinfo").textContent = useFill ? "구멍을 주변 형상으로 메운 모델 · '메운 곳 표시'로 측정 안 된 부분 확인"
                                      : "끌어서 돌리기 · 휠/두 손가락으로 확대 · 오른쪽 끌기로 이동";
     if (useFill && showEst) loadEst();
@@ -303,6 +339,7 @@ function loadEst() {
     $("vinfo").textContent = "주황 = 사진에 안 찍혀 주변 형상으로 메운 곳(측정값 아님)";
   });
 }
+$("splatb").onclick = () => { useSplat = !useSplat; if (useSplat) { showEst = false; setMeasure(false); } syncToggles(); loadModel(false); };
 $("fillb").onclick = () => { useFill = !useFill; if (!useFill) showEst = false; syncToggles(); loadModel(false); };
 $("estb").onclick = () => { showEst = !showEst; syncToggles();
   if (showEst) loadEst(); else if (estModel) { scene.remove(estModel); estModel = null; } };
