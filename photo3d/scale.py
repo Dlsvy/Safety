@@ -325,6 +325,35 @@ def georeference(rec: pycolmap.Reconstruction, image_dir: Path, marker_size: flo
                 dst = geo - offset
                 report["coordinate_offset"] = offset.tolist()
             src = np.array([tri[n][0] for n in names])
+            # 정밀 GPS(RTK 드론)가 있으면: 많은 촬영 위치로 형상·축척·방위를, 기준점으로 위치(측지 높이 차 포함)를 맞춘다.
+            # Helenenschacht(RTK 드론 88장·기준점 5): 기준점만 26.7cm → 혼합 19.4cm(하나씩 빼고 검사)
+            gpsm = {k: v["gps"] for k, v in manifest.items() if v.get("gps")}
+            n2i = {rec.image(i).name: i for i in rec.reg_image_ids()}
+            ks = [k for k in gpsm if k in n2i]
+            hybrid = None
+            if len(ks) >= 5 and proj.upper().startswith("EPSG:4326"):
+                E = lla_to_enu(np.array([gpsm[k] for k in ks]), ref)
+                Cc = np.array([rec.image(n2i[k]).projection_center() for k in ks])
+                sg, Rg, tg = umeyama(Cc, E)
+                rg = np.linalg.norm((sg * (Rg @ Cc.T)).T + tg - E, axis=1)
+                if np.median(rg) < 0.15 and np.linalg.norm(E - E.mean(0), axis=1).max() > 10:
+                    Pg = (sg * (Rg @ src.T)).T + tg
+                    sh = (dst - Pg).mean(0)
+                    lo = [float(np.linalg.norm(Pg[i] + (np.delete(dst - Pg, i, 0)).mean(0) - dst[i]))
+                          for i in range(len(names))] if len(names) >= 3 else []
+                    hybrid = (sg, Rg, tg + sh, lo, float(np.median(rg)))
+            if hybrid:
+                s, R, t, lo, gmed = hybrid
+                res = {n: float(np.linalg.norm(s * R @ src[i] + t - dst[i])) for i, n in enumerate(names)}
+                report.update(method="gps_rtk+gcp", gcp_used=names, gcp_residual_m=res,
+                              gcp_rmse_m=float(np.sqrt(np.mean(np.square(list(res.values()))))),
+                              checkpoint_loo_error_m=dict(zip(names, lo)), gps_fit_median_m=gmed,
+                              gcp_views={n: tri[n][1] for n in names})
+                log(f"  정밀 GPS(형상·축척) + 기준점(위치) 정합: 검사점 평균 {np.mean(lo) * 100:.1f}cm·최대 {max(lo) * 100:.1f}cm")
+                sim = pycolmap.Sim3d(float(s), pycolmap.Rotation3d(R), np.asarray(t, float).reshape(3, 1))
+                rec.transform(sim)
+                report["sim3"] = {"scale": float(s), "R": R.tolist(), "t": np.asarray(t).tolist()}
+                return report
             s, R, t = umeyama(src, dst)
             res = {n: float(np.linalg.norm(s * R @ src[i] + t - dst[i])) for i, n in enumerate(names)}
             loo = {}
