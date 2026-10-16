@@ -299,7 +299,7 @@ def main(argv=None):
         if a.dense == "openmvs" and a.colmap_bin:
             a.dense = "colmap"
     if a.cmd == "run" and a.splat_steps < 0:
-        a.splat_steps = {"fast": 7000, "gpu-max": 30000}.get(a.profile, 0)
+        a.splat_steps = {"fast": 15000, "gpu-max": 30000}.get(a.profile, 0)
     if a.cmd == "run" and not a.inputs and not a.from_colmap:
         ap.error("사진/동영상 입력 또는 --from-colmap 이 필요합니다")
     if a.cmd == "fill-stage":

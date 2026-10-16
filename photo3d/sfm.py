@@ -16,6 +16,19 @@ import numpy as np
 import pycolmap
 
 
+SIFT_PEAK = 0.002
+
+
+def _incr_options(robust: bool = True) -> "pycolmap.IncrementalPipelineOptions":
+    o = pycolmap.IncrementalPipelineOptions()
+    o.ba_refine_principal_point = False
+    if robust:
+        o.min_num_matches = 15
+        o.mapper.abs_pose_min_num_inliers = 20
+        o.structure_less_registration_fallback = True
+    return o
+
+
 FEATURES = {
     "sift": (pycolmap.FeatureExtractorType.SIFT, pycolmap.FeatureMatcherType.SIFT_BRUTEFORCE),
     "sift_hq": (pycolmap.FeatureExtractorType.SIFT, pycolmap.FeatureMatcherType.SIFT_BRUTEFORCE),
@@ -77,7 +90,8 @@ def _run_cli(colmap: str, image_dir: Path, work: Path, sequential: bool, single_
     ext = ["--FeatureExtraction.use_gpu", g, "--FeatureExtraction.type", ftype[0],
            "--FeatureExtraction.max_image_size", str(max_side)]
     ext += (["--AlikedExtraction.max_num_features", "8000"] if features == "aliked"
-            else ["--SiftExtraction.max_num_features", str(max_features)])
+            else ["--SiftExtraction.max_num_features", str(max_features),
+                  "--SiftExtraction.peak_threshold", str(SIFT_PEAK)])
     if features == "sift_hq":
         ext += ["--SiftExtraction.estimate_affine_shape", "1", "--SiftExtraction.domain_size_pooling", "1"]
     mat = ["--FeatureMatching.use_gpu", g, "--FeatureMatching.type", ftype[1]]
@@ -112,16 +126,35 @@ def _run_cli(colmap: str, image_dir: Path, work: Path, sequential: bool, single_
         run("exhaustive_matcher", "--database_path", str(db), *mat)
     sparse = work / "sparse"
     sparse.mkdir(exist_ok=True)
-    if mapper == "global":
-        run("global_mapper", "--database_path", str(db), "--image_path", str(image_dir),
-            "--output_path", str(sparse),
-            *(["--GlobalMapper.ba_ceres_use_gpu", "1", "--GlobalMapper.gp_use_gpu", "1"] if use_gpu else []))
-    else:
+    relaxed = ([] if rig else ["--Mapper.min_num_matches", "15", "--Mapper.abs_pose_min_num_inliers", "20",
+                               "--Mapper.structure_less_registration_fallback", "1"])
+
+    def load(d):
+        return {i: pycolmap.Reconstruction(x) for i, x in enumerate(sorted(d.iterdir()))
+                if (x / "images.bin").exists()}
+
+    def incremental(out):
         run("mapper", "--database_path", str(db), "--image_path", str(image_dir),
-            "--output_path", str(sparse), "--Mapper.ba_refine_principal_point", "0", *rig_args,
+            "--output_path", str(out), "--Mapper.ba_refine_principal_point", "0", *relaxed, *rig_args,
             *(["--Mapper.ba_use_gpu", "1"] if use_gpu else []))
+        return load(out)
+
+    if mapper == "global":
+        sg, si = sparse / "_global", sparse / "_incr"
+        sg.mkdir(); si.mkdir()
+        run("global_mapper", "--database_path", str(db), "--image_path", str(image_dir),
+            "--output_path", str(sg),
+            *(["--GlobalMapper.ba_ceres_use_gpu", "1", "--GlobalMapper.gp_use_gpu", "1"] if use_gpu else []))
+        cands = [("global", load(sg))]
+        try:  # 증분(완화)도 돌려 비교 — 글로벌이 가끔 위치를 통째로 틀리게 잡는 문제 대비
+            cands.append(("incremental", incremental(si)))
+        except RuntimeError as e:
+            log(f"  증분 매퍼 생략: {e}")
+        recs = pick_best(cands, log)
+    else:
+        recs = incremental(sparse)
     logf.close()
-    return [pycolmap.Reconstruction(d) for d in sorted(sparse.iterdir()) if (d / "images.bin").exists()]
+    return list(recs.values())
 
 
 def run_sfm(image_dir: Path, work: Path, sequential: bool, single_camera: bool = True,
@@ -152,6 +185,8 @@ def run_sfm(image_dir: Path, work: Path, sequential: bool, single_camera: bool =
     ext = pycolmap.FeatureExtractionOptions()
     ext.sift.max_num_features = max_features
     ext.max_image_size = max_side
+    # 대비 낮은 흰 벽·천장에서도 특징점(기본 0.0067 → 0.002). 실험: 사진당 연결점 +40%, 위치 오차 감소
+    ext.sift.peak_threshold = SIFT_PEAK
     mopt = pycolmap.FeatureMatchingOptions()
     # features: sift(기본) | sift_lg(SIFT+LightGlue) | aliked(ALIKED+LightGlue, 반복무늬·저질감에 강함)
     ext_type, match_type = FEATURES[features]
@@ -182,8 +217,9 @@ def run_sfm(image_dir: Path, work: Path, sequential: bool, single_camera: bool =
 
     tv = pycolmap.TwoViewGeometryOptions()
     if robust:
-        # 반복 패턴(조적·거푸집·비계)에서 생기는 잘못된 짝을 거른다
-        tv.min_num_inliers = 40
+        # 반복 패턴(조적·거푸집·비계)에서 생기는 잘못된 짝을 거른다(DEGENSAC).
+        # 인라이어 기준은 15(기본). 40 으로 올리면 실내에서 사진 절반이 빠졌다(ETH3D office 54%, pipes 50%)
+        tv.min_num_inliers = 15
         tv.use_degensac = True
     if rig:
         # 360 걷기 촬영: 가까운 위치끼리만 매칭(먼 위치끼리의 반복무늬 오매칭 방지 — 합성 시험에서 18 m 오등록 원인),
@@ -219,7 +255,14 @@ def run_sfm(image_dir: Path, work: Path, sequential: bool, single_camera: bool =
         shutil.rmtree(sparse)
     sparse.mkdir()
     log(f"  매핑: {mapper}")
-    if mapper == "global":
+    if mapper == "global" and not rig:
+        # 글로벌 + 증분(완화) 둘 다 돌려 비교 — 매핑은 매칭보다 훨씬 빠르다
+        sg, si = sparse / "_global", sparse / "_incr"
+        sg.mkdir(); si.mkdir()
+        cands = [("global", pycolmap.global_mapping(db, image_dir, sg)),
+                 ("incremental", pycolmap.incremental_mapping(db, image_dir, si, options=_incr_options(robust)))]
+        recs = pick_best(cands, log)
+    elif mapper == "global":
         recs = pycolmap.global_mapping(db, image_dir, sparse)
     else:
         opts = pycolmap.IncrementalPipelineOptions()
@@ -230,8 +273,10 @@ def run_sfm(image_dir: Path, work: Path, sequential: bool, single_camera: bool =
             opts.ba_refine_extra_params = False
             opts.structure_less_registration_fallback = True  # 약한 연결 구간에서 모델이 끊기지 않게
         if robust:
-            opts.min_num_matches = 10 if rig else 30
-            opts.mapper.abs_pose_min_num_inliers = 15 if rig else 60
+            # 완화(15/20 + 구조 없는 등록 보조): 엄격(30/60)은 실내 등록률 50~77%, 완화는 97~100% (오차 비슷)
+            opts.min_num_matches = 10 if rig else 15
+            opts.mapper.abs_pose_min_num_inliers = 15 if rig else 20
+            opts.structure_less_registration_fallback = True
         recs = pycolmap.incremental_mapping(db, image_dir, sparse, options=opts)
     if not recs:
         raise RuntimeError("SfM 실패: 이미지 간 겹침이 부족합니다(사진 간 60~80% 겹치게 촬영)")
@@ -316,6 +361,23 @@ def _all_names(recs: dict) -> list[str]:
     for r in recs.values():
         names |= {im.name for im in r.images.values()}
     return sorted(names)
+
+
+def pick_best(cands: list[tuple[str, dict]], log=print) -> dict:
+    """여러 매퍼 결과 중 고르기: 가장 큰 모델의 등록 사진 수가 많은 쪽, 비슷하면(1장 차이 이내) 증분 매퍼.
+    실험(ETH3D 실내 5곳): 글로벌 매퍼는 등록률은 높지만 가끔 카메라 위치가 통째로 틀어진다(중앙 오차 0.2~0.3 m,
+    등록 수로는 감지 불가). 둘이 비슷한 수를 등록하면 안정적인 증분 쪽을 쓴다."""
+    def size(recs):
+        return max((r.num_reg_images() for r in recs.values()), default=0)
+    best = None
+    for name, recs in cands:
+        n = size(recs)
+        log(f"  매퍼 {name}: 가장 큰 모델 {n}장, 모델 {len(recs)}개")
+        if best is None or n > best[1] + 1 or (abs(n - best[1]) <= 1 and name.startswith("incr") and not best[0].startswith("incr")):
+            best = (name, n, recs)
+    if best:
+        log(f"  → {best[0]} 결과 사용")
+    return best[2] if best else {}
 
 
 def _finish(recs: dict, n_imgs: int, log, refine_pp: bool = False,

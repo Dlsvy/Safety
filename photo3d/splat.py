@@ -80,6 +80,55 @@ def _std_order(src: Path, dst: Path) -> int:
     return len(out)
 
 
+def _growth_flags(brush: str, steps: int) -> list[str]:
+    """가우시안이 더 많이·오래 자라게(r/GaussianSplatting: 1만 개대는 '쓸 수 없는' 수준, 수십만~수백만 권장).
+    Brush 버전마다 옵션 이름이 달라 --help 에 있는 것만 넣는다."""
+    try:
+        h = subprocess.run([brush, "--help"], capture_output=True, text=True, timeout=30,
+                           encoding="utf-8", errors="replace").stdout
+    except Exception:
+        return []
+    want = [("--max-splats", "3000000"),             # 8GB 기준 상한
+            ("--growth-grad-threshold", "0.0015"),   # 기본 0.0025 → 더 쉽게 증식
+            ("--growth-select-fraction", "0.4"),
+            ("--growth-stop-iter", str(int(steps * 0.7)))]
+    out = []
+    for k, v in want:
+        if k in h:
+            out += [k, v]
+    return out
+
+
+def _seed_from_dense(dense: Path, sp: Path, log, limit: int = 300_000) -> None:
+    """스플랫 시작점을 희소 점(수천 개) 대신 조밀 점군(수십만)으로 — 점이 적으면 가우시안이 몇천 개에서
+    자라지 못해 흐릿하고 방사형 줄무늬가 생긴다(PC '집': 5,875개)."""
+    fused = dense / "fused.ply"
+    if not fused.exists():
+        return
+    try:
+        import numpy as np
+        import pycolmap
+        from .fill import read_points
+        xyz, _, rgb = read_points(fused)
+        if len(xyz) < 1000:
+            return
+        if len(xyz) > limit:
+            k = np.random.default_rng(0).choice(len(xyz), limit, replace=False)
+            xyz, rgb = xyz[k], (rgb[k] if rgb is not None else None)
+        rec = pycolmap.Reconstruction(sp)
+        for pid in list(rec.point3D_ids()):
+            rec.delete_point3D(pid)
+        col = rgb if rgb is not None else np.full((len(xyz), 3), 160, np.uint8)
+        for x, c in zip(xyz, col.astype(np.uint8)):
+            rec.add_point3D(x, pycolmap.Track(), c)
+        rec.write(sp)
+        from .fill import _write_ply
+        _write_ply(sp.parent.parent / "init.ply", xyz, np.zeros_like(xyz), col.astype(np.uint8))
+        log(f"  스플랫 시작점: 조밀 점 {len(xyz):,}개")
+    except Exception as e:
+        log(f"  스플랫 시작점 교체 생략: {e}")
+
+
 def start_splat(dense: Path, brush: str, steps: int = 30000, max_res: int = 1920, log=print) -> dict:
     """Brush 학습을 백그라운드로 시작(바로 반환). 메쉬·텍스처(CPU)와 동시에 GPU 로 돈다."""
     work = dense.parent / "splat"
@@ -89,6 +138,7 @@ def start_splat(dense: Path, brush: str, steps: int = 30000, max_res: int = 1920
     (data / "sparse" / "0").mkdir(parents=True)
     for f in (dense / "sparse").glob("*.bin"):
         shutil.copy2(f, data / "sparse" / "0" / f.name)
+    _seed_from_dense(dense, data / "sparse" / "0", log)
     try:
         os.symlink(dense / "images", data / "images", target_is_directory=True)
     except OSError:  # 윈도우 일반 계정은 심볼릭 링크 불가 → 복사
@@ -98,6 +148,7 @@ def start_splat(dense: Path, brush: str, steps: int = 30000, max_res: int = 1920
     cmd = [brush, str(data), "--total-steps", str(steps), "--export-every", str(steps),
            "--export-path", str(exp), "--export-name", "splat_{iter}.ply",
            "--max-resolution", str(max_res), "--eval-every", str(steps + 1)]
+    cmd += _growth_flags(brush, steps)
     log(f"  $ brush {data.name} --total-steps {steps} --max-resolution {max_res} (백그라운드 GPU)")
     logf = open(work / "brush.log", "w", encoding="utf-8", errors="replace")
     proc = subprocess.Popen(cmd, cwd=work, stdout=logf, stderr=subprocess.STDOUT)
