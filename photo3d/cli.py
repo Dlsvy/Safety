@@ -173,7 +173,9 @@ def run(a) -> dict:
         log("  가우시안 스플래팅 완료 대기…")
         try:
             from . import splat
-            rep["splat"] = splat.finish_splat(side["splat"], out, log=log)
+            # 빠른 모드: 본 처리가 끝난 뒤 최대 5분만 더 기다리고 중간본 사용(최고 품질은 끝까지)
+            rep["splat"] = splat.finish_splat(side["splat"], out, log=log,
+                                              max_wait=300 if a.profile == "fast" else None)
             rep["splat"]["minutes"] = round((time.time() - side["splat_t0"]) / 60, 1)
         except Exception as e:
             log(f"  스플래팅 실패(메쉬 결과는 정상): {e}")
@@ -317,7 +319,7 @@ def main(argv=None):
         if a.dense == "openmvs" and a.colmap_bin:
             a.dense = "colmap"
     if a.cmd == "run" and a.splat_steps < 0:
-        a.splat_steps = {"fast": 15000, "gpu-max": 30000}.get(a.profile, 0)
+        a.splat_steps = {"fast": 10000, "gpu-max": 30000}.get(a.profile, 0)
     if a.cmd == "run" and not a.inputs and not a.from_colmap:
         ap.error("사진/동영상 입력 또는 --from-colmap 이 필요합니다")
     if a.cmd == "fill-stage":

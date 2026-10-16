@@ -243,6 +243,50 @@ def _preview_points(d: Path, limit: int = 30000) -> dict:
             "xyz": xyz.round(3).ravel().tolist(), "rgb": rgb.astype(int).ravel().tolist(), "cams": cams}
 
 
+def splat_progress(d: Path) -> tuple[int, int] | None:
+    """Brush 진행 스텝: brush.log 에서 '현재/전체' 숫자를 찾는다(진행 막대 출력)"""
+    bl = d / "out" / "work" / "splat" / "brush.log"
+    run = d / "out" / "run.log"
+    if not bl.exists():
+        return None
+    m = re.search(r"--total-steps (\d+)", run.read_text(encoding="utf-8", errors="replace")) if run.exists() else None
+    total = int(m.group(1)) if m else None
+    try:
+        with open(bl, "rb") as f:
+            f.seek(max(0, bl.stat().st_size - 20000))
+            tail = f.read().decode("utf-8", "replace")
+    except OSError:
+        return None
+    hits = re.findall(r"(\d+)\s*/\s*(\d+)", tail)
+    if total:
+        hits = [h for h in hits if int(h[1]) == total]
+    if not hits:
+        return (0, total) if total else None
+    cur, tot = map(int, hits[-1])
+    return cur, tot
+
+
+def side_tasks(d: Path, lines: list[str]) -> list[str]:
+    """본 작업과 동시에 도는 작업(구멍 메우기: CPU, 스플랫: GPU)의 상태 한 줄씩"""
+    text = "\n".join(lines)
+    out = []
+    if "구멍 메운 모델: 별도 CPU" in text:
+        out.append("구멍 메우기(CPU): " + ("완료" if "구멍 메운 모델 완료 (" in text or "구멍 메우기 실패" in text else "진행 중"))
+    if "가우시안 스플래팅: GPU" in text:
+        if "스플랫 " in text and "site_splat" in text or "스플래팅 실패" in text:
+            out.append("실사 스플랫(GPU): 완료")
+        else:
+            pr = splat_progress(d)
+            t0 = next((float(m.group(1)) for m in (re.match(r"\[\s*([\d.]+)s\].*가우시안 스플래팅: GPU", ln) for ln in lines) if m), None)
+            el = time.time() - (load_job(d.name).get("started") or time.time()) - (t0 or 0)
+            if pr and pr[0] > 50:
+                eta = el / pr[0] * (pr[1] - pr[0])
+                out.append(f"실사 스플랫(GPU): {pr[0]:,}/{pr[1]:,}스텝 · 남은 시간 약 {max(1, round(eta / 60))}분")
+            else:
+                out.append(f"실사 스플랫(GPU): 학습 중 {round(el / 60)}분째")
+    return out
+
+
 def job_view(job: dict) -> dict:
     d = job_dir(job["id"])
     v = dict(job)
@@ -255,13 +299,14 @@ def job_view(job: dict) -> dict:
             if mm:
                 step = int(mm.group(1))
                 stage = f"{step}/5 {dict(STAGES).get(f'{step}/5')}"
-            elif "구멍 메우기" in ln:
+            elif "구멍 메운 모델 완료 대기" in ln:  # 본 작업(5/5)이 끝나고 동시 작업을 기다리는 중
                 step, stage = 6, "구멍 메우기"
-            elif "가우시안 스플래팅" in ln:
+            elif "스플래팅 완료 대기" in ln:
                 step, stage = 7, "실사(스플래팅) 학습"
         if stage:
             v["stage"] = stage
         v["step"] = step
+        v["side"] = side_tasks(d, lines)
         human = [ln for ln in lines if "$ " not in ln and ln.strip()]  # 실행 명령(경로 덩어리)은 숨김
         v["last_log"] = re.sub(r"^\[\s*[\d.]+s\]\s*", "", human[-1]).strip()[-160:] if human else ""
         src = _preview_source(d)

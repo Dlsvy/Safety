@@ -145,7 +145,8 @@ def start_splat(dense: Path, brush: str, steps: int = 30000, max_res: int = 1920
         shutil.copytree(dense / "images", data / "images")
     exp = work / "export"
     exp.mkdir()
-    cmd = [brush, str(data), "--total-steps", str(steps), "--export-every", str(steps),
+    # 중간 결과를 1/3 마다 저장 → 빠른 모드에서 시간 상한에 걸리면 마지막 중간본을 쓴다
+    cmd = [brush, str(data), "--total-steps", str(steps), "--export-every", str(max(1000, steps // 3)),
            "--export-path", str(exp), "--export-name", "splat_{iter}.ply",
            "--max-resolution", str(max_res), "--eval-every", str(steps + 1)]
     cmd += _growth_flags(brush, steps)
@@ -155,17 +156,30 @@ def start_splat(dense: Path, brush: str, steps: int = 30000, max_res: int = 1920
     return {"proc": proc, "logf": logf, "work": work, "exp": exp, "steps": steps}
 
 
-def finish_splat(h: dict, out: Path, log=print) -> dict:
-    r = h["proc"].wait()
+def finish_splat(h: dict, out: Path, log=print, max_wait: float | None = None) -> dict:
+    """학습 끝을 기다린다. max_wait(초)를 넘기면 멈추고 마지막 중간 저장본을 쓴다(빠른 모드)."""
+    stopped = False
+    try:
+        r = h["proc"].wait(timeout=max_wait)
+    except subprocess.TimeoutExpired:
+        h["proc"].terminate()
+        try:
+            h["proc"].wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            h["proc"].kill()
+        r, stopped = 0, True
     h["logf"].close()
-    plys = sorted(h["exp"].glob("splat_*.ply"), key=lambda p: int(p.stem.split("_")[-1]))
+    plys = sorted((p for p in h["exp"].glob("splat_*.ply") if p.stat().st_size > 0),
+                  key=lambda p: int(p.stem.split("_")[-1]))
+    if stopped:
+        log(f"  스플랫 시간 상한 도달 → 중간 저장본 사용({plys[-1].stem.split('_')[-1] if plys else '없음'}스텝)")
     if r != 0 or not plys:
         tail = (h["work"] / "brush.log").read_text(encoding="utf-8", errors="replace").splitlines()[-6:]
         raise RuntimeError("Brush 실패: " + " | ".join(tail))
     dst = out / "site_splat.ply"
     n = _std_order(plys[-1], dst)
     log(f"  스플랫 {n:,}개 → {dst.name} ({dst.stat().st_size / 1e6:.0f} MB)")
-    return {"file": dst.name, "splats": n, "steps": h["steps"], "up_axis": "Z",
+    return {"file": dst.name, "splats": n, "steps": int(plys[-1].stem.split("_")[-1]), "up_axis": "Z",
             "note": "보기용. 메쉬 GLB(Y-up)와 맞추려면 X축 -90° 회전"}
 
 

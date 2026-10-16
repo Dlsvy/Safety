@@ -96,7 +96,7 @@ details input{margin-top:6px;width:100%}
 .cur .ico{border-color:var(--line);border-top-color:var(--accent);border-right-color:var(--accent);animation:spin .9s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.cur .ico{animation-duration:3s}}
-.plog{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.plog{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:6px;white-space:pre-line;overflow:hidden}
 .pel{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:4px}
 .pv{position:relative;height:240px;border-radius:8px;background:#0f1113;overflow:hidden}
 .pv canvas{width:100%;height:100%;display:block;touch-action:none;cursor:grab}
@@ -408,7 +408,8 @@ function progress(j) {
     const k = i + 1, cls = step > k ? "done" : step === k ? "cur" : "";
     return `<li class="${cls}"><span class="ico" aria-hidden="true">${step > k ? "✓" : ""}</span>${t}</li>`;
   }).join("");
-  L.el.querySelector(".plog").textContent = j.status === "queued" ? "앞 작업이 끝나면 시작합니다" : (j.last_log || "");
+  L.el.querySelector(".plog").textContent = j.status === "queued" ? "앞 작업이 끝나면 시작합니다"
+    : [j.last_log || "", ...(j.side || []).map((t) => "· 동시에: " + t)].join("\n");
   if (j.preview_rev && j.preview_rev !== L.rev && !L.loading) { L.rev = j.preview_rev; loadPreview(j.id, L); }
   return L.el;
 }
