@@ -100,11 +100,18 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
               "--number-views-fuse", "3", "-o", str(mvs / "scene_dense.mvs")] + common, mvs, log, logf)
     # v2.3: ReconstructMesh/RefineMesh 는 메쉬(.ply)만 쓴다 → 다음 단계에 --mesh-file 로 넘긴다
     dense_scene = mvs / "scene_dense.mvs"
-    # --decimate 는 Windows OpenMVS v2.4.0 에서 ReconstructMesh 비정상 종료를 일으켜(PC 2회) 쓰지 않는다
-    _run([_bin("ReconstructMesh"), str(dense_scene),
-          "-o", str(mvs / "scene_mesh.mvs")] + common, mvs, log, logf)
-    mesh = mvs / "scene_mesh.ply"
-    if q["refine"]:
+    if engine == "colmap":
+        # Windows OpenMVS v2.4.0 ReconstructMesh 가 이 점군에서 GPU판·CPU판 모두 종료(PC 3회)
+        # → 메쉬는 COLMAP Poisson(정점 색 포함)으로 만든다
+        mesh = mvs / "scene_mesh_poisson.ply"
+        _run([colmap_bin, "poisson_mesher", "--input_path", str(dense / "fused.ply"),
+              "--output_path", str(mesh), "--PoissonMeshing.depth", "10" if quality == "draft" else "11",
+              "--PoissonMeshing.trim", "7", "--PoissonMeshing.color", "16"], mvs, log, logf)
+    else:
+        _run([_bin("ReconstructMesh"), str(dense_scene),
+              "-o", str(mvs / "scene_mesh.mvs")] + common, mvs, log, logf)
+        mesh = mvs / "scene_mesh.ply"
+    if q["refine"] and engine != "colmap":
         try:
             _run([_bin("RefineMesh"), str(dense_scene), "--mesh-file", str(mesh),
                   "--resolution-level", str(q["res"] + 1), "--max-face-area", "16",
@@ -113,12 +120,18 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
                 mesh = mvs / "scene_refined.ply"
         except RuntimeError as e:
             log(f"  메쉬 정제 건너뜀: {e}")
-    _run([_bin("TextureMesh"), str(dense_scene), "--mesh-file", str(mesh), "--export-type", "ply",  # v2.3 SaveOBJ 세그폴트 → PLY(+png)
-          "--empty-color", "8421504",  # 어느 사진에도 안 보인 면은 회색(기본 주황)
-          "--resolution-level", str(max(0, q["res"] - 1)),
-          "-o", str(mvs / "scene_textured.mvs")] + common, mvs, log, logf)
+    try:
+        _run([_bin("TextureMesh"), str(dense_scene), "--mesh-file", str(mesh), "--export-type", "ply",  # v2.3 SaveOBJ 세그폴트 → PLY(+png)
+              "--empty-color", "8421504",  # 어느 사진에도 안 보인 면은 회색(기본 주황)
+              "--resolution-level", str(max(0, q["res"] - 1)),
+              "-o", str(mvs / "scene_textured.mvs")] + common, mvs, log, logf)
+    except RuntimeError as e:
+        log(f"  텍스처 실패 → 정점 색 메쉬로 대체: {e}")
     obj = mvs / "scene_textured.ply"
-    ply = mvs / "scene_dense.ply"
     if not obj.exists():
-        raise RuntimeError("텍스처 메쉬가 생성되지 않았습니다")
+        if engine == "colmap" and mesh.exists():
+            obj = mesh  # 사진 텍스처 대신 점군 색을 입힌 메쉬
+        else:
+            raise RuntimeError("텍스처 메쉬가 생성되지 않았습니다")
+    ply = mvs / "scene_dense.ply"
     return {"textured_obj": obj, "dense_ply": ply if ply.exists() else None, "log": logf}
