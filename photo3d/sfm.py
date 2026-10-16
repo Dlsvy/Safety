@@ -98,11 +98,13 @@ def _run_cli(colmap: str, image_dir: Path, work: Path, sequential: bool, single_
         run("rig_configurator", "--database_path", str(db), "--rig_config_path", str(cfg))
         mat += ["--FeatureMatching.rig_verification", "1"]
         rig_args = ["--Mapper.ba_refine_sensor_from_rig", "0", "--Mapper.ba_refine_focal_length", "0",
-                    "--Mapper.ba_refine_extra_params", "0"]
+                    "--Mapper.ba_refine_extra_params", "0", "--Mapper.min_num_matches", "10",
+                    "--Mapper.abs_pose_min_num_inliers", "15", "--Mapper.structure_less_registration_fallback", "1"]
         mapper = "incremental"  # 리그는 증분 매퍼가 안정적
-    if rig and len(list(image_dir.rglob("*.jpg"))) > 400:
+    if rig:
         run("sequential_matcher", "--database_path", str(db), *mat, "--SequentialMatching.overlap", "8",
-            "--SequentialMatching.quadratic_overlap", "1", "--SequentialMatching.expand_rig_images", "1")
+            "--SequentialMatching.quadratic_overlap", "0", "--SequentialMatching.expand_rig_images", "1",
+            "--TwoViewGeometry.min_num_inliers", "15")
     elif sequential:
         run("sequential_matcher", "--database_path", str(db), *mat,
             "--SequentialMatching.overlap", "15", "--SequentialMatching.quadratic_overlap", "1")
@@ -183,12 +185,16 @@ def run_sfm(image_dir: Path, work: Path, sequential: bool, single_camera: bool =
         # 반복 패턴(조적·거푸집·비계)에서 생기는 잘못된 짝을 거른다
         tv.min_num_inliers = 40
         tv.use_degensac = True
-    if rig and n_imgs > 400:
-        log("  매칭: 360 리그 순차(위치 순서, 리그 확장)")
+    if rig:
+        # 360 걷기 촬영: 가까운 위치끼리만 매칭(먼 위치끼리의 반복무늬 오매칭 방지 — 합성 시험에서 18 m 오등록 원인),
+        # 리그 제약이 기하 검증을 겸하므로 쌍별 인라이어 기준은 낮춘다. 합성 360(30곳·45 m): RMSE 16 mm
+        log("  매칭: 360 리그 순차(위치 순서 ±8, 리그 확장)")
         so = pycolmap.SequentialPairingOptions()
         so.overlap = 8
-        so.quadratic_overlap = True
+        so.quadratic_overlap = False
         so.expand_rig_images = True
+        tv.min_num_inliers = 15
+        tv.use_degensac = False
         pycolmap.match_sequential(db, matching_options=mopt, pairing_options=so,
                                   verification_options=tv, device=device)
     elif sequential:
@@ -198,7 +204,7 @@ def run_sfm(image_dir: Path, work: Path, sequential: bool, single_camera: bool =
         so.quadratic_overlap = True
         pycolmap.match_sequential(db, matching_options=mopt, pairing_options=so,
                                   verification_options=tv, device=device)
-    elif n_imgs <= (500 if rig else 300):
+    elif n_imgs <= 300:
         log("  매칭: 전수(exhaustive)")
         pycolmap.match_exhaustive(db, matching_options=mopt, verification_options=tv, device=device)
     else:
@@ -222,9 +228,10 @@ def run_sfm(image_dir: Path, work: Path, sequential: bool, single_camera: bool =
             opts.ba_refine_sensor_from_rig = False
             opts.ba_refine_focal_length = False
             opts.ba_refine_extra_params = False
+            opts.structure_less_registration_fallback = True  # 약한 연결 구간에서 모델이 끊기지 않게
         if robust:
-            opts.min_num_matches = 15 if rig else 30
-            opts.mapper.abs_pose_min_num_inliers = 30 if rig else 60
+            opts.min_num_matches = 10 if rig else 30
+            opts.mapper.abs_pose_min_num_inliers = 15 if rig else 60
         recs = pycolmap.incremental_mapping(db, image_dir, sparse, options=opts)
     if not recs:
         raise RuntimeError("SfM 실패: 이미지 간 겹침이 부족합니다(사진 간 60~80% 겹치게 촬영)")

@@ -24,7 +24,7 @@
 | Gradual selection | Metashape | `sfm.gradual_selection` 재투영 2px·삼각측량각 1.5°·2장 트랙 → BA 재실행 | Strecha 카메라 위치 RMSE: castle-P19 67.6→46.5mm(최대 206→98mm), entry 9.0→9.1mm, fountain 4.4→4.4mm |
 | 품질 보고서 | Pix4D Quality Report, Terra 보고서 | `report.py` 신호등 판정 + 겹침 지도(점마다 본 사진 수) | 앱 '품질 보고서' 버튼 |
 | 영상 키프레임 | PIX4Dcatch 겹침, Terra 영상 모델링 | 광류 이동량 누적 기준(화면폭 6~20%)으로 키프레임 + 구간 최선명 | 정지 구간 60프레임 → 1장 |
-| 360 카메라 | Metashape Spherical, COLMAP 파노라마 | 등장방형 → 90° 원근 10방향(수평 6 + 아래 35° 4), 렌즈값 고정 | 합성 360 시험 중 |
+| 360 카메라 | Metashape Spherical, COLMAP 파노라마 | 등장방형 → 90° 원근 10방향을 리그로 묶음(렌즈·방향 고정), 위치 순서대로만 매칭, 약한 구간 structure-less 등록 | 합성 360 걷기(30곳·45 m): 30/30 등록, 위치 RMSE 15 mm(최대 40 mm). 360 영상: 270/270 장 등록. (전수 매칭 시엔 반복무늬 오매칭으로 18 m 오등록 → 순차 매칭으로 해결) |
 | 가우시안 스플래팅 | Terra 5.x | Brush(Apache-2.0) GPU 학습, 앱 '실사 보기' | 클라우드 300스텝 확인 |
 
 ## 앞으로 (우선순위)

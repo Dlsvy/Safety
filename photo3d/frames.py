@@ -73,7 +73,8 @@ def _motion(a: Path, b: Path, side: int = 480) -> float:
     return float(np.median(np.linalg.norm((p1 - p0)[ok].reshape(-1, 2), axis=1)) / A.shape[1])
 
 
-def select_keyframes(cands: list[Path], scores: np.ndarray, target: int, log=print) -> list[int]:
+def select_keyframes(cands: list[Path], scores: np.ndarray, target: int, min_tau: float = 0.06,
+                     log=print) -> list[int]:
     """시차(화면 이동) 기반 키프레임 선택 — 제자리에 서 있던 구간의 중복 프레임은 버리고,
     누적 이동이 기준(폭의 τ)을 넘을 때마다 그 근처에서 가장 선명한 프레임을 고른다.
     (PIX4Dcatch·Terra 영상 모델링 권장: 겹침 80~90% ≈ 프레임 간 이동 10~20%)"""
@@ -84,7 +85,7 @@ def select_keyframes(cands: list[Path], scores: np.ndarray, target: int, log=pri
     cum = np.r_[0, np.cumsum(mv)]
     blur_thr = 0.35 * np.median(scores)
     total = cum[-1]
-    tau = max(0.06, min(0.2, total / max(target, 1)))  # 이동 6~20% 마다 한 장
+    tau = max(min_tau, min(min_tau * 3.3, total / max(target, 1)))  # 이동 6~20%(360 은 1/4) 마다 한 장
     keep, last = [], -1e9
     i = 0
     while i < n:
@@ -116,7 +117,7 @@ def _video_size(video: Path) -> tuple[int, int] | None:
 
 
 def extract_video(video: Path, out_dir: Path, target_frames: int, max_side: int,
-                  log=print) -> list[Path]:
+                  pano: bool = False, log=print) -> list[Path]:
     """동영상에서 target_frames 장을 고른다(구간별 최선명 프레임)."""
     tmp = out_dir.parent / "_raw_frames"
     tmp.mkdir(parents=True, exist_ok=True)
@@ -134,7 +135,8 @@ def extract_video(video: Path, out_dir: Path, target_frames: int, max_side: int,
     if not cands:
         raise RuntimeError("동영상에서 프레임을 뽑지 못했습니다")
     scores = np.array([sharpness(p) for p in cands])
-    keep = select_keyframes(cands, scores, target_frames, log=log)
+    # 360(등장방형)은 화면 폭이 360°라 같은 걸음에도 이동 비율이 약 1/4 → 기준도 1/4
+    keep = select_keyframes(cands, scores, target_frames, min_tau=0.015 if pano else 0.06, log=log)
     out = []
     for n, i in enumerate(keep):
         dst = out_dir / f"v_{n:05d}.jpg"
@@ -254,7 +256,7 @@ def prepare_inputs(inputs: list[Path], out_dir: Path, max_side: int = 3200,
         w_h = _video_size(v)
         if w_h and is_equirect(*w_h):
             # 360° 영상: 위치 수를 줄이고(한 위치당 10방향) 각 프레임을 원근 사진으로 자른다
-            raw = extract_video(v, sub, max(12, per // 4), 99999, log=log)
+            raw = extract_video(v, sub, max(12, per // 3), 99999, pano=True, log=log)
             frames = []
             for f in raw:
                 frames += equirect_views(f, out_dir / f"{v.stem}_{f.stem}")
