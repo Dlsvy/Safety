@@ -450,7 +450,7 @@ function progress(j) {
   L.el.querySelector(".pbar i").style.width = pct + "%";
   L.el.querySelector(".ppct").textContent = j.status === "queued" ? "대기 중"
     : `${pct}%` + (j.eta_min ? ` · 남은 시간 약 ${j.eta_min}분` : "");
-  L.el.querySelector(".plog").textContent = j.status === "queued" ? "앞 작업이 끝나면 시작합니다"
+  L.el.querySelector(".plog").textContent = j.status === "queued" ? (j.wait_info || "앞 작업이 끝나면 시작합니다")
     : [j.last_log || "", ...(j.side || []).map((t) => "· 동시에: " + t)].join("\n");
   if (j.preview_rev && j.preview_rev !== L.rev && !L.loading) { L.rev = j.preview_rev; loadPreview(j.id, L); }
   return L.el;

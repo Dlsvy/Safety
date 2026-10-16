@@ -408,6 +408,10 @@ def run_job(jid: str) -> None:
     save_job(job)
     tools = find_tools()
     t_wait = time.time()
+    if _PRIOR["state"] in ("확인 전", "준비 중"):
+        (d / "out").mkdir(parents=True, exist_ok=True)
+        with open(d / "out" / "run.log", "a", encoding="utf-8") as f:
+            f.write("[    0.0s] 흰 벽 채우기 준비(처음 한 번 PyTorch·깊이 모델 설치) 끝나기를 기다리는 중…\n")
     while _PRIOR["state"] in ("확인 전", "준비 중") and time.time() - t_wait < 1800:
         time.sleep(3)  # 앱 시작 직후: 흰 벽 채우기 준비(설치)가 끝난 뒤 처리 시작 — 두 곳에서 동시에 설치하지 않게
     env = dict(os.environ)
@@ -693,6 +697,16 @@ class Handler(BaseHTTPRequestHandler):
                     if (jd / "job.json").exists():
                         jobs.append(job_view(json.loads((jd / "job.json").read_text(encoding="utf-8"))))
                 jobs.sort(key=lambda j: j.get("created", 0), reverse=True)
+                # 대기 이유: 한 번에 하나씩(GPU 하나) — 앞에서 처리 중인 작업과 순서를 알려준다
+                run = [j for j in jobs if j["status"] == "running"]
+                waiting = sorted((j for j in jobs if j["status"] == "queued"), key=lambda j: j.get("created", 0))
+                for k, j in enumerate(waiting):
+                    if run:
+                        j["wait_info"] = f"'{run[0]['name']}' 처리가 끝나면 시작합니다" + (f" (대기 {k + 1}번째)" if k else "")
+                    elif _PRIOR["state"] in ("확인 전", "준비 중"):
+                        j["wait_info"] = "흰 벽 채우기 준비(처음 한 번 PyTorch·깊이 모델 설치) 중 — 끝나면 시작합니다"
+                    else:
+                        j["wait_info"] = "곧 시작합니다"
                 return self._json({"jobs": jobs, "tools": find_tools(), "lan": lan_urls()})
             m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})", p)
             if m:
@@ -717,8 +731,10 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/thumb", p)
             if m:
                 d = job_dir(m.group(1))
+                lp = load_job(m.group(1)).get("local_path")
+                src = Path(lp) if lp else d / "input"
                 imgs = sorted((d / "out" / "work" / "images").glob("*.jpg")) or \
-                    sorted(q for q in (d / "input").glob("*") if q.suffix.lower() in {".jpg", ".jpeg", ".png"})
+                    sorted(q for q in src.glob("*") if q.suffix.lower() in {".jpg", ".jpeg", ".png"})
                 return self._file(imgs[0]) if imgs else self._json({"error": "없음"}, 404)
             if p in ("/supersplat", "/supersplat/"):  # 스플랫 편집기(SuperSplat, MIT) — ?load=/files/<id>/site_splat.ply
                 return self._file(WEB / "vendor" / "supersplat" / "index.html")
