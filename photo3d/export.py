@@ -16,7 +16,95 @@ import trimesh
 ZUP_TO_YUP = np.array([[1, 0, 0, 0], [0, 0, 1, 0], [0, -1, 0, 0], [0, 0, 0, 1]], float)
 
 
+_PT = {"float32": "<f4", "float": "<f4", "float64": "<f8", "double": "<f8", "uint8": "u1", "uchar": "u1",
+       "int8": "i1", "char": "i1", "int16": "<i2", "short": "<i2", "uint16": "<u2", "ushort": "<u2",
+       "int32": "<i4", "int": "<i4", "uint32": "<u4", "uint": "<u4"}
+
+
+def load_openmvs_textured_ply(path: Path) -> trimesh.Trimesh | None:
+    """OpenMVS TextureMesh 의 PLY(면마다 texcoord 리스트, v2.4 는 texnumber 추가)를 직접 읽는다.
+    trimesh 기본 PLY 로더가 v2.4 형식의 UV 를 잘못 읽어 텍스처가 검게 깨지는 문제(PC 확인) 대응.
+    해당 형식이 아니면 None."""
+    from PIL import Image
+    with open(path, "rb") as f:
+        elems, cur, tex = [], None, []
+        while True:
+            line = f.readline().decode("ascii", "ignore").strip()
+            if line.startswith("format") and "binary_little_endian" not in line:
+                return None
+            if line.startswith("comment TextureFile"):
+                tex.append(line.split(None, 2)[2])
+            elif line.startswith("element"):
+                _, name, n = line.split()
+                cur = {"name": name, "n": int(n), "props": []}
+                elems.append(cur)
+            elif line.startswith("property list"):
+                _, _, ct, it, name = line.split()
+                cur["props"].append((name, "list", _PT[ct], _PT[it]))
+            elif line.startswith("property"):
+                _, t, name = line.split()
+                cur["props"].append((name, "scalar", _PT[t]))
+            elif line == "end_header":
+                break
+        data = f.read()
+    if not tex:
+        return None
+    off, out = 0, {}
+    for e in elems:
+        if e["name"] == "vertex":
+            dt = np.dtype([(p[0], p[2]) for p in e["props"]])
+            arr = np.frombuffer(data, dt, e["n"], off)
+            off += dt.itemsize * e["n"]
+            out["v"] = np.stack([arr["x"], arr["y"], arr["z"]], 1).astype(np.float64)
+        elif e["name"] == "face":
+            # 리스트 길이가 일정하다고 보고(삼각형 3, texcoord 6) 고정 레코드로 읽은 뒤 확인
+            fields = []
+            for p in e["props"]:
+                if p[1] == "list":
+                    k = 3 if p[0] == "vertex_indices" else 6
+                    fields += [(p[0] + "_n", p[2]), (p[0], p[3], (k,))]
+                else:
+                    fields.append((p[0], p[2]))
+            dt = np.dtype(fields)
+            arr = np.frombuffer(data, dt, e["n"], off)
+            off += dt.itemsize * e["n"]
+            if not (arr["vertex_indices_n"] == 3).all() or not (arr["texcoord_n"] == 6).all():
+                return None
+            out["f"] = arr["vertex_indices"].astype(np.int64)
+            out["uv"] = arr["texcoord"].reshape(-1, 3, 2).astype(np.float64)
+            out["tn"] = arr["texnumber"].astype(np.int64) if "texnumber" in arr.dtype.names else None
+    imgs = [Image.open(path.parent / t).convert("RGB") for t in tex]
+    uv = out["uv"]
+    if len(imgs) > 1:  # 여러 장이면 가로로 이어 붙이고 u 를 다시 계산
+        h = max(i.height for i in imgs)
+        W = sum(i.width for i in imgs)
+        atlas = Image.new("RGB", (W, h))
+        x0s = np.cumsum([0] + [i.width for i in imgs[:-1]])
+        for i, x0 in zip(imgs, x0s):
+            atlas.paste(i, (int(x0), h - i.height))
+        tn = out["tn"] if out["tn"] is not None else np.zeros(len(uv), np.int64)
+        ws = np.array([i.width for i in imgs])[tn]
+        hs = np.array([i.height for i in imgs])[tn]
+        uv = uv.copy()
+        uv[:, :, 0] = (x0s[tn][:, None] + uv[:, :, 0] * ws[:, None]) / W
+        uv[:, :, 1] = uv[:, :, 1] * hs[:, None] / h
+        img = atlas
+    else:
+        img = imgs[0]
+    V = out["v"][out["f"]].reshape(-1, 3)  # 면 모서리마다 정점을 따로(UV 경계 보존)
+    F = np.arange(len(V)).reshape(-1, 3)
+    vis = trimesh.visual.TextureVisuals(uv=uv.reshape(-1, 2), image=img)
+    return trimesh.Trimesh(V, F, visual=vis, process=False)
+
+
 def _load(obj: Path) -> trimesh.Trimesh:
+    if obj.suffix.lower() == ".ply":
+        try:
+            m = load_openmvs_textured_ply(obj)
+            if m is not None:
+                return m
+        except Exception as e:  # 형식이 다르면 일반 로더로
+            print(f"  (텍스처 PLY 직접 읽기 실패 → 일반 로더: {e})")
     m = trimesh.load(obj, process=False, force="mesh")
     if isinstance(m, trimesh.Scene):
         m = trimesh.util.concatenate(list(m.geometry.values()))
