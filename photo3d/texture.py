@@ -228,6 +228,43 @@ def bake(mesh, sparse: Path, img_dir: Path, atlas: int = 8192, max_faces: int = 
         lo = np.floor(uv.min(0)) - pad
         hi = np.ceil(uv.max(0)) + pad
         patches.append((fs, int(label[fs[0]]), lo, hi))
+    # ── 4-1) 이음새 색 맞춤(seam leveling): 패치 경계의 같은 꼭짓점이 두 패치에서 같은 색이 되도록
+    #        패치마다 RGB 오프셋을 최소제곱으로 구한다(Waechter 의 전역 보정을 패치 단위로 단순화)
+    p_off = np.zeros((len(patches), 3), np.float32)
+    try:
+        pid_of_comp = np.full(ncomp, -1, np.int64)
+        for i, (fs, ci, lo, hi) in enumerate(patches):
+            pid_of_comp[comp[fs[0]]] = i
+        cv_ = F.ravel()
+        cp_ = pid_of_comp[np.repeat(comp, 3)]
+        ok = cp_ >= 0
+        key = np.unique(np.stack([cv_[ok], cp_[ok]], 1), axis=0)          # (꼭짓점, 패치) 고유 쌍
+        order_ = np.argsort(key[:, 0], kind="stable")
+        key = key[order_]
+        same_v = key[1:, 0] == key[:-1, 0]
+        ia, ib = np.where(same_v)[0], np.where(same_v)[0] + 1              # 같은 꼭짓점을 공유하는 패치 쌍
+        if len(ia) > 50:
+            need = np.unique(np.r_[ia, ib])
+            col = np.zeros((len(key), 3), np.float32)
+            labs = np.array([patches[q][1] for q in key[need, 1]])
+            for ci in np.unique(labs):
+                rows = need[labs == ci]
+                uv, _ = _project(cams[ci], V[key[rows, 0]])
+                col[rows] = _sample(img(ci), uv[:, 0], uv[:, 1]) * gain[ci]
+            from scipy.sparse import coo_matrix
+            from scipy.sparse.linalg import lsqr
+            n, P = len(ia), len(patches)
+            A = coo_matrix((np.r_[np.ones(n), -np.ones(n), np.full(P, 0.1)],
+                            (np.r_[np.arange(n), np.arange(n), n + np.arange(P)],
+                             np.r_[key[ia, 1], key[ib, 1], np.arange(P)])), shape=(n + P, P)).tocsr()
+            before = float(np.abs(col[ia] - col[ib]).mean())
+            for ch in range(3):
+                p_off[:, ch] = lsqr(A, np.r_[col[ib, ch] - col[ia, ch], np.zeros(P)], iter_lim=300)[0]
+            p_off = np.clip(p_off, -40, 40)
+            after = float(np.abs((col[ia] + p_off[key[ia, 1]]) - (col[ib] + p_off[key[ib, 1]])).mean())
+            log(f"  이음새 색 차이 {before:.1f} → {after:.1f} (경계 {n:,}쌍)")
+    except Exception as e:
+        log(f"  이음새 색 맞춤 생략: {e}")
     unseen = np.where(~seen_f)[0]
     cell = 6  # 안 보인 면: 6×6 텍셀 셀(정점 색을 섞어 칠함)
     # 전체 면적에 맞춰 축척 s 결정 → 선반(shelf) 방식으로 포장, 넘치면 s 를 줄여 다시
@@ -268,7 +305,7 @@ def bake(mesh, sparse: Path, img_dir: Path, atlas: int = 8192, max_faces: int = 
         M2 = np.array([[s_scale, 0, -lo[0] * s_scale], [0, s_scale, -lo[1] * s_scale]], np.float32)
         crop = cv2.warpAffine(im, M2, (w, h), flags=cv2.INTER_AREA if s_scale < 0.7 else cv2.INTER_LINEAR,
                               borderMode=cv2.BORDER_REFLECT)
-        crop = np.clip(crop[:, :, ::-1].astype(np.float32) * gain[ci], 0, 255).astype(np.uint8)
+        crop = np.clip(crop[:, :, ::-1].astype(np.float32) * gain[ci] + p_off[i], 0, 255).astype(np.uint8)
         hh, ww = min(h, H - py), min(w, W - px)
         tex[py:py + hh, px:px + ww] = crop[:hh, :ww]
         out_uv[fs] = (corner_uv[fs] - lo) * s_scale + np.array([px, py])
