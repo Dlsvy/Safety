@@ -265,6 +265,20 @@ def bake(mesh, sparse: Path, img_dir: Path, atlas: int = 8192, max_faces: int = 
             log(f"  이음새 색 차이 {before:.1f} → {after:.1f} (경계 {n:,}쌍)")
     except Exception as e:
         log(f"  이음새 색 맞춤 생략: {e}")
+    # 비정상적으로 큰 패치(카메라 가까이·뒤에 걸친 면이 사진 밖으로 수만 px 뻗음)는 사진 대신 정점 색으로.
+    # 예전: 높이가 수십만 px 인 패치 하나를 그대로 잘라 붙이다 수십 분 멈춘 듯 보였음(PC castle-P19, 빠르게 모드)
+    keep_i, n_big = [], 0
+    for i, (fs, ci, lo, hi) in enumerate(patches):
+        lim = 1.05 * max(cams[ci]["w"], cams[ci]["h"])
+        if np.any(~np.isfinite(lo)) or np.any(~np.isfinite(hi)) or float(np.max(hi - lo)) > lim:
+            seen_f[fs] = False
+            n_big += 1
+        else:
+            keep_i.append(i)
+    if n_big:
+        p_off = p_off[keep_i]
+        patches = [patches[i] for i in keep_i]
+        log(f"  사진 밖으로 뻗은 패치 {n_big:,}개는 정점 색으로")
     unseen = np.where(~seen_f)[0]
     cell = 6  # 안 보인 면: 6×6 텍셀 셀(정점 색을 섞어 칠함)
     # 전체 면적에 맞춰 축척 s 결정 → 선반(shelf) 방식으로 포장, 넘치면 s 를 줄여 다시
@@ -280,7 +294,7 @@ def bake(mesh, sparse: Path, img_dir: Path, atlas: int = 8192, max_faces: int = 
         ok = True
         for i in idx_sorted:
             w, h = sizes[i]
-            if w > atlas:
+            if w > atlas or h > atlas:
                 ok = False
                 break
             if x + w > atlas:
@@ -294,6 +308,23 @@ def bake(mesh, sparse: Path, img_dir: Path, atlas: int = 8192, max_faces: int = 
         if ok and total_h <= atlas:
             break
         s_scale *= 0.9
+    else:  # 12번 줄여도 안 들어가면 → 안 들어가는 패치는 정점 색으로(멈추거나 실패하지 않게)
+        drop = [i for i in range(len(patches)) if pos[i] is None or sizes[i][0] > atlas or sizes[i][1] > atlas
+                or pos[i][1] + sizes[i][1] > atlas]
+        if drop:
+            for i in drop:
+                seen_f[patches[i][0]] = False
+            dset = set(drop)
+            keep_i = [i for i in range(len(patches)) if i not in dset]
+            patches = [patches[i] for i in keep_i]
+            pos = [pos[i] for i in keep_i]
+            sizes = [sizes[i] for i in keep_i]
+            p_off = p_off[keep_i]
+            unseen = np.where(~seen_f)[0]
+            need_rows = (len(unseen) + cells_per_row - 1) // cells_per_row if len(unseen) else 0
+            y = max((p[1] for p in pos), default=0)
+            rowh = max((sizes[i][1] for i in range(len(pos)) if pos[i][1] == y), default=0)
+            log(f"  아틀라스에 안 들어간 패치 {len(drop):,}개는 정점 색으로")
     H = W = atlas
     tex = np.zeros((H, W, 3), np.uint8)
     out_uv = np.zeros((nF, 3, 2), np.float64)  # 픽셀 좌표(아틀라스)
