@@ -115,7 +115,7 @@ def prune_mesh(mesh_path: Path, points_path: Path, dst: Path, log=print) -> Path
 
 def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
                      quality: str = "medium", threads: int = 0, engine: str = "openmvs",
-                     colmap_bin: str | None = None, log=print) -> dict:
+                     colmap_bin: str | None = None, on_dense_ready=None, log=print) -> dict:
     q = QUALITY[quality]
     sparse = work / "sparse_georef"
     if sparse.exists():
@@ -136,8 +136,9 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
     mvs.mkdir(exist_ok=True)
     logf = work / "openmvs.log"
     common = ["-w", str(mvs), "-v", "2"] + (["--max-threads", str(threads)] if threads else [])
-    _run([_bin("InterfaceCOLMAP"), "-i", str(dense), "-o", str(mvs / "scene.mvs"),
-          "--image-folder", str(dense / "images")] + common, mvs, log, logf)
+    if engine != "colmap":
+        _run([_bin("InterfaceCOLMAP"), "-i", str(dense), "-o", str(mvs / "scene.mvs"),
+              "--image-folder", str(dense / "images")] + common, mvs, log, logf)
     if engine == "colmap":
         # GPU 조밀복원: COLMAP PatchMatchStereo(CUDA) → StereoFusion → OpenMVS 로 가져와 메쉬·텍스처
         if not colmap_bin:
@@ -165,10 +166,10 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
         if fused.name != "fused.ply":
             shutil.copy2(fused, dense / "fused.ply")
             fused = dense / "fused.ply"
-        _run([_bin("InterfaceCOLMAP"), "-i", str(dense), "-p", str(fused),
-              "-o", str(mvs / "scene_dense.mvs"), "--image-folder", str(dense / "images")] + common,
-             mvs, log, logf)
+        # (OpenMVS 장면 변환은 이 경로에서 쓰지 않음 — 시간 절약)
         shutil.copy2(fused, mvs / "scene_dense.ply")
+        if on_dense_ready:  # 점군 완성 → 메운 모델(CPU 별도 프로세스)·스플랫(GPU)을 지금 동시에 시작
+            on_dense_ready(dense, mvs / "scene_dense.ply")
     else:
         _run([_bin("DensifyPointCloud"), str(mvs / "scene.mvs"),
               "--resolution-level", str(q["res"]), "--number-views", str(q["views"]),

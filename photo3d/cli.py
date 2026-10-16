@@ -24,7 +24,11 @@ def run(a) -> dict:
     logp = out / "run.log"
     t0 = time.time()
 
+    stage_t = []
+
     def log(msg):
+        if len(msg) > 3 and msg[0].isdigit() and msg[1:3] == "/5":
+            stage_t.append((msg, time.time() - t0))
         line = f"[{time.time() - t0:7.1f}s] {msg}"
         print(line, flush=True)
         with open(logp, "a", encoding="utf-8") as f:
@@ -79,8 +83,34 @@ def run(a) -> dict:
     cams = np.array([rec.image(i).projection_center() for i in rec.reg_image_ids()])
 
     log(f"4/5 조밀복원·메쉬·텍스처 (품질 {a.quality})")
+    side = {}  # 동시에 도는 작업: 메운 모델(CPU 별도 프로세스), 스플랫(GPU)
+
+    def on_dense_ready(dense_dir: Path, dense_ply: Path):
+        import subprocess
+        import sys
+        if a.fill:
+            cn = work / "cams.npy"
+            np.save(cn, cams if not geo["method"].startswith("none") else np.zeros((0, 3)))
+            fl = open(work / "fill.log", "w", encoding="utf-8")
+            side["fill"] = (subprocess.Popen([sys.executable, "-m", "photo3d", "fill-stage", str(dense_ply), str(out),
+                                              str(work), str(cn), "1" if a.dense == "colmap" else "0"],
+                                             stdout=fl, stderr=subprocess.STDOUT, env={**os.environ, "PYTHONIOENCODING": "utf-8"}), fl)
+            log("  ▶ 구멍 메운 모델: 별도 CPU 프로세스로 동시에 시작")
+        if a.splat_steps > 0:
+            try:
+                from . import splat
+                brush = splat.find_brush(Path(__file__).resolve().parents[1], log=log)
+                if brush:
+                    side["splat"] = splat.start_splat(dense_dir, brush, steps=a.splat_steps, max_res=a.splat_res, log=log)
+                    side["splat_t0"] = time.time()
+                    log(f"  ▶ 가우시안 스플래팅: GPU 로 동시에 시작({a.splat_steps}스텝)")
+            except Exception as e:
+                log(f"  스플래팅 시작 실패(메쉬 결과는 정상): {e}")
+
     res = mvs.densify_and_mesh(rec, img_dir, work, quality=a.quality, engine=a.dense,
-                               colmap_bin=a.colmap_bin, log=log)
+                               colmap_bin=a.colmap_bin, on_dense_ready=on_dense_ready, log=log)
+    if a.fill and "fill" not in side and res.get("dense_ply"):  # CPU(OpenMVS) 경로: 콜백 없음 → 지금 시작
+        on_dense_ready(work / "dense", res["dense_ply"])
 
     rep["dense"] = res.get("stats")
     log("5/5 정리·유니티 내보내기")
@@ -102,53 +132,29 @@ def run(a) -> dict:
             json.dump({"frame": "gltf_yup_m", "cameras": camj}, f, ensure_ascii=False)
     except Exception as e:
         log(f"  촬영 위치 저장 생략: {e}")
-    if a.fill and res.get("dense_ply"):
-        from . import fill
-        log("  구멍 메우기(주변 형상 Poisson) — 메운 부분은 '추정 영역'으로 따로 표시")
+    if "fill" in side:
+        log("  구멍 메운 모델 완료 대기…")
+        proc, fl = side["fill"]
+        rc = proc.wait()
+        fl.close()
+        fr = out / "fill_result.json"
+        if rc == 0 and fr.exists():
+            rep["fill"] = json.loads(fr.read_text(encoding="utf-8"))
+            log(f"  구멍 메운 모델 완료 (추정 영역 {rep['fill']['estimated_area_ratio']:.0%})")
+        else:
+            tail = (work / "fill.log").read_text(encoding="utf-8", errors="replace").splitlines()[-4:]
+            log("  구멍 메우기 실패: " + " | ".join(tail))
+    if "splat" in side:
+        log("  가우시안 스플래팅 완료 대기…")
         try:
-            fr = fill.fill_holes(res["dense_ply"], out, cams if not geo["method"].startswith("none") else None,
-                                 log=log)
-            m, est = fr["mesh"], fr["estimated_mask"]
-            if (work / "dense" / "sparse").exists() and (work / "dense" / "images").exists() and a.dense == "colmap":
-                try:  # 측정된 면은 사진 텍스처, 메운 면은 주변 실제 색 유지
-                    from .texture import bake
-                    est_only = est.copy()
-                    est_m = m.submesh([np.where(est)[0]], append=True) if est.any() else None
-                    m, _ = bake(m, work / "dense" / "sparse", work / "dense" / "images", atlas=8192,
-                                max_faces=len(m.faces) + 1, vertex_only=est_only, log=log)
-                except Exception as e:
-                    log(f"  메운 모델 사진 텍스처 생략: {e}")
-                    est_m = None
-            else:
-                est_m = None
-            m.apply_transform(export.ZUP_TO_YUP)
-            m.export(out / "site_filled.glb")  # 보기용: 구멍 없이 이어진 전체(색 포함)
-            if est_m is not None:
-                est_m.apply_transform(export.ZUP_TO_YUP)
-                est_mesh = est_m
-            else:
-                est_mesh = m.submesh([np.where(est)[0]], append=True) if est.any() else None
-            if est_mesh is not None:
-                est_mesh.export(out / "site_estimated.glb")  # 유니티: SiteEstimated 레이어로 경고
-            rep["fill"] = {"estimated_area_ratio": fr["estimated_area_ratio"], "filled": "site_filled.glb",
-                           "file": "site_estimated.glb" if est_mesh is not None else None,
-                           "note": "추정 영역은 측정값이 아님 — 높은 위치/드론 사진 추가 또는 도면 3D 결합으로 대체 권장"}
-        except Exception as e:
-            log(f"  구멍 메우기 실패: {e}")
-    if a.splat_steps > 0 and (work / "dense" / "sparse").exists():
-        from . import splat
-        log(f"  가우시안 스플래팅(GPU, Brush {a.splat_steps}스텝) — 사진처럼 부드러운 보기용")
-        try:
-            brush = splat.find_brush(Path(__file__).resolve().parents[1], log=log)
-            if not brush:
-                raise RuntimeError("Brush 실행파일 없음")
-            ts = time.time()
-            rep["splat"] = splat.train_splat(work / "dense", out, brush, steps=a.splat_steps,
-                                             max_res=a.splat_res, log=log)
-            rep["splat"]["minutes"] = round((time.time() - ts) / 60, 1)
+            from . import splat
+            rep["splat"] = splat.finish_splat(side["splat"], out, log=log)
+            rep["splat"]["minutes"] = round((time.time() - side["splat_t0"]) / 60, 1)
         except Exception as e:
             log(f"  스플래팅 실패(메쉬 결과는 정상): {e}")
     rep["elapsed_min"] = round((time.time() - t0) / 60, 1)
+    ends = [t for _, t in stage_t[1:]] + [time.time() - t0]
+    rep["timing_s"] = {name: round(e - b, 1) for (name, b), e in zip(stage_t, ends)}
     rep["grade"] = grade(rep)
     with open(out / "report.json", "w", encoding="utf-8") as f:
         json.dump(rep, f, ensure_ascii=False, indent=2, default=str)
@@ -206,6 +212,9 @@ def main(argv=None):
             pass
     ap = argparse.ArgumentParser(prog="photo3d", description="폰 사진/동영상 → 실측 3D")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    fs = sub.add_parser("fill-stage", help=argparse.SUPPRESS)  # 내부용: 메운 모델을 별도 프로세스로
+    fs.add_argument("dense_ply"); fs.add_argument("out"); fs.add_argument("work"); fs.add_argument("cams")
+    fs.add_argument("bake")
     r = sub.add_parser("run", help="전체 파이프라인 실행")
     r.add_argument("inputs", nargs="*", help="사진 파일/폴더/동영상")
     r.add_argument("--from-colmap", help="외부에서 계산한 COLMAP 결과 폴더(images/, sparse/) — 적은 장수용 MapAnything 등")
@@ -280,5 +289,11 @@ def main(argv=None):
         a.splat_steps = {"fast": 7000, "gpu-max": 30000}.get(a.profile, 0)
     if a.cmd == "run" and not a.inputs and not a.from_colmap:
         ap.error("사진/동영상 입력 또는 --from-colmap 이 필요합니다")
+    if a.cmd == "fill-stage":
+        from . import fill
+        def flog(m):
+            print(m, flush=True)
+        fill.run_stage(Path(a.dense_ply), Path(a.out), Path(a.work), Path(a.cams), a.bake == "1", log=flog)
+        return
     if a.cmd == "run":
         run(a)

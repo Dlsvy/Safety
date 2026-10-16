@@ -186,3 +186,30 @@ def fill_holes(dense_ply: Path, out: Path, cam_centers: np.ndarray | None, depth
     frac = float(area[est].sum() / max(area.sum(), 1e-9))
     log(f"  메운 메쉬 {len(m.faces):,}면, 추정 영역 {frac:.1%}")
     return {"mesh": m, "estimated_mask": est, "estimated_area_ratio": round(frac, 4)}
+
+
+def run_stage(dense_ply: Path, out: Path, work: Path, cams_npy: Path | None, bake_tex: bool, log=print) -> dict:
+    """구멍 메운 모델 단계 전체(메우기 → 사진 텍스처 → GLB). 메인 메쉬와 동시에 별도 프로세스로 돈다."""
+    import json
+    from . import export
+    cams = np.load(cams_npy) if cams_npy and Path(cams_npy).exists() else None
+    fr = fill_holes(dense_ply, out, cams, log=log)
+    m, est = fr["mesh"], fr["estimated_mask"]
+    est_m = m.submesh([np.where(est)[0]], append=True) if est.any() else None
+    if bake_tex and (work / "dense" / "sparse").exists() and (work / "dense" / "images").exists():
+        try:  # 측정된 면은 사진 텍스처, 메운 면은 주변 실제 색 유지
+            from .texture import bake
+            m, _ = bake(m, work / "dense" / "sparse", work / "dense" / "images", atlas=8192,
+                        max_faces=len(m.faces) + 1, vertex_only=est.copy(), log=log)
+        except Exception as e:
+            log(f"  메운 모델 사진 텍스처 생략: {e}")
+    m.apply_transform(export.ZUP_TO_YUP)
+    m.export(out / "site_filled.glb")  # 보기용: 구멍 없이 이어진 전체
+    if est_m is not None:
+        est_m.apply_transform(export.ZUP_TO_YUP)
+        est_m.export(out / "site_estimated.glb")
+    res = {"estimated_area_ratio": fr["estimated_area_ratio"], "filled": "site_filled.glb",
+           "file": "site_estimated.glb" if est_m is not None else None,
+           "note": "추정 영역은 측정값이 아님 — 높은 위치/드론 사진 추가 또는 도면 3D 결합으로 대체 권장"}
+    (out / "fill_result.json").write_text(json.dumps(res, ensure_ascii=False), encoding="utf-8")
+    return res
