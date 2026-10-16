@@ -59,7 +59,7 @@ def run(a) -> dict:
         rec, st = sfm.run_sfm(img_dir, work / "sfm", sequential=prep["sequential"],
                               single_camera=prep.get("single_camera", True),
                               camera_model=prep.get("camera_model") or "OPENCV",
-                              camera_params=prep.get("camera_params"),
+                              camera_params=prep.get("camera_params"), rig=prep.get("rig"),
                               mapper=a.mapper, use_gpu=a.gpu,
                               colmap_bin=a.colmap_bin, features=a.features,
                               mask_dir=Path(a.masks) if a.masks else None, refine_pp=a.refine_pp,

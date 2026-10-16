@@ -160,7 +160,22 @@ def pano_view_size(W: int) -> int:
     return int(min(1600, W // 4)) // 2 * 2
 
 
+def pano_rotation(yaw: float, pitch: float) -> np.ndarray:
+    """파노라마(리그) 좌표 ← 원근 카메라 좌표 회전. 좌표: x 오른쪽, y 아래, z 앞(카메라 관례)."""
+    cy, sy = np.cos(np.radians(yaw)), np.sin(np.radians(yaw))
+    cp, sp = np.cos(np.radians(pitch)), np.sin(np.radians(pitch))
+    Rx = np.array([[1, 0, 0], [0, cp, sp], [0, -sp, cp]])
+    Ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]])
+    return Ry @ Rx
+
+
+def view_folder(yaw: int, pitch: int) -> str:
+    return f"pano/y{yaw:03d}p{abs(pitch):02d}"
+
+
 def equirect_views(src: Path, dst_prefix: Path, size: int | None = None) -> list[Path]:
+    """등장방형 한 장 → PANO_VIEWS 방향의 원근 사진. 방향마다 폴더(pano/yXXXpYY/)에 같은 파일명으로 저장
+    → COLMAP 리그(한 위치의 10방향은 같은 점에서 정해진 각도로 찍힌 것)로 묶는다."""
     img = cv2.imread(str(src), cv2.IMREAD_COLOR)
     if img is None:
         return []
@@ -172,18 +187,17 @@ def equirect_views(src: Path, dst_prefix: Path, size: int | None = None) -> list
     d = np.stack([u / f, v / f, np.ones_like(u)], -1)  # 카메라 좌표(x 오른쪽, y 아래, z 앞)
     d /= np.linalg.norm(d, axis=-1, keepdims=True)
     out = []
+    root = dst_prefix.parent
     for yaw, pitch in PANO_VIEWS:
-        cy, sy = np.cos(np.radians(yaw)), np.sin(np.radians(yaw))
-        cp, sp = np.cos(np.radians(pitch)), np.sin(np.radians(pitch))
-        Rx = np.array([[1, 0, 0], [0, cp, sp], [0, -sp, cp]])     # 아래(-pitch)로 기울이기
-        Ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]])
-        w = d @ (Ry @ Rx).T
+        w = d @ pano_rotation(yaw, pitch).T
         lon = np.arctan2(w[..., 0], w[..., 2])
         lat = np.arcsin(np.clip(w[..., 1], -1, 1))
         mx = ((lon / (2 * np.pi) + 0.5) * W).astype(np.float32)
         my = ((lat / np.pi + 0.5) * H).astype(np.float32)
         view = cv2.remap(img, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_WRAP)
-        p = dst_prefix.with_name(f"{dst_prefix.name}_y{yaw:03d}p{abs(pitch):02d}.jpg")
+        folder = root / view_folder(yaw, pitch)
+        folder.mkdir(parents=True, exist_ok=True)
+        p = folder / f"{dst_prefix.name}.jpg"
         cv2.imwrite(str(p), view, [cv2.IMWRITE_JPEG_QUALITY, 95])
         out.append(p)
     return out
@@ -243,7 +257,7 @@ def prepare_inputs(inputs: list[Path], out_dir: Path, max_side: int = 3200,
             raw = extract_video(v, sub, max(12, per // 4), 99999, log=log)
             frames = []
             for f in raw:
-                frames += equirect_views(f, f.with_suffix(""))
+                frames += equirect_views(f, out_dir / f"{v.stem}_{f.stem}")
                 f.unlink()
             pano_n += len(frames)
             log(f"  360° 영상 → 위치 {len(raw)}곳 × {len(PANO_VIEWS)}방향 = {len(frames)}장")
@@ -267,4 +281,7 @@ def prepare_inputs(inputs: list[Path], out_dir: Path, max_side: int = 3200,
             "camera_model": "PINHOLE" if only_pano else None,
             "camera_params": (lambda z: f"{z / 2},{z / 2},{z / 2},{z / 2}")(next(iter(PANO_SIZES)))
             if only_pano and len(PANO_SIZES) == 1 else None,
-            "single_camera": (only_pano and len(PANO_SIZES) == 1) or pano_n == 0}
+            "single_camera": pano_n == 0,
+            # 리그 설정: 방향 폴더마다 카메라 하나, 첫 방향 기준 회전(이동 0)
+            "rig": [{"prefix": view_folder(y, p) + "/", "cam_from_rig": pano_rotation(y, p).T.tolist()}
+                    for (y, p) in PANO_VIEWS] if pano_n else None}

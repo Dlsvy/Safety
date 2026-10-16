@@ -219,8 +219,9 @@ if os.environ.get("PANO"):
     except Exception:
         cam_data.cycles.panorama_type = "EQUIRECTANGULAR"
     center = Vector((1.0, 8.0, 0.0))
+    arc = float(os.environ.get("PANO_ARC", "1.0"))  # 원의 몇 분의 일을 걸을지(촘촘한 영상 흉내)
     for k in range(N):
-        t = k / N * 2 * math.pi
+        t = k / N * 2 * math.pi * arc
         p = center + Vector((19 * math.cos(t), 17 * math.sin(t), 1.7))
         cam.location = p
         cam.rotation_euler = (math.radians(90), 0, t + random.uniform(-0.3, 0.3))

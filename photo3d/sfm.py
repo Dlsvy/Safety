@@ -24,10 +24,42 @@ FEATURES = {
 }
 
 
+def _quat_wxyz(R) -> list[float]:
+    from scipy.spatial.transform import Rotation
+    x, y, z, w = Rotation.from_matrix(np.asarray(R)).as_quat()
+    return [float(w), float(x), float(y), float(z)]
+
+
+def _rig_cam_json(r: dict, ref: bool) -> dict:
+    c = {"image_prefix": r["prefix"]}
+    if ref:
+        c["ref_sensor"] = True
+    else:
+        c["cam_from_rig_rotation"] = _quat_wxyz(r["cam_from_rig"])
+        c["cam_from_rig_translation"] = [0.0, 0.0, 0.0]
+    return c
+
+
+def _apply_rig(db: Path, rig: list) -> None:
+    cams = []
+    for i, r in enumerate(rig):
+        c = pycolmap.RigConfigCamera()
+        c.image_prefix = r["prefix"]
+        c.ref_sensor = i == 0
+        if i:
+            c.cam_from_rig = pycolmap.Rigid3d(pycolmap.Rotation3d(np.asarray(r["cam_from_rig"])), np.zeros(3))
+        cams.append(c)
+    cfg = pycolmap.RigConfig()
+    cfg.cameras = cams
+    with pycolmap.Database.open(str(db)) as database:
+        pycolmap.apply_rig_config([cfg], database)
+
+
 def _run_cli(colmap: str, image_dir: Path, work: Path, sequential: bool, single_camera: bool,
              camera_model: str, mapper: str, use_gpu: bool, log, features: str = "sift",
              mask_dir: Path | None = None, max_side: int = 3200,
-             max_features: int = 12000, camera_params: str | None = None) -> list[pycolmap.Reconstruction]:
+             max_features: int = 12000, camera_params: str | None = None,
+             rig: list | None = None) -> list[pycolmap.Reconstruction]:
     """COLMAP 4.x 실행파일(윈도우 CUDA 릴리스 등)로 SfM. GPU 로 수 배 빠르고 ALIKED/LightGlue 사용 가능."""
     import subprocess
     db = work / "database.db"
@@ -51,12 +83,27 @@ def _run_cli(colmap: str, image_dir: Path, work: Path, sequential: bool, single_
     mat = ["--FeatureMatching.use_gpu", g, "--FeatureMatching.type", ftype[1]]
     reader = ["--ImageReader.camera_model", camera_model,
               "--ImageReader.single_camera", "1" if single_camera else "0"]
+    if rig:
+        reader += ["--ImageReader.single_camera_per_folder", "1"]
     if mask_dir:
         reader += ["--ImageReader.mask_path", str(mask_dir)]
     if camera_params:
         reader += ["--ImageReader.camera_params", camera_params]
     run("feature_extractor", "--database_path", str(db), "--image_path", str(image_dir), *reader, *ext)
-    if sequential:
+    rig_args = []
+    if rig:
+        import json
+        cfg = work / "rig_config.json"
+        cfg.write_text(json.dumps([{"cameras": [_rig_cam_json(r, i == 0) for i, r in enumerate(rig)]}]))
+        run("rig_configurator", "--database_path", str(db), "--rig_config_path", str(cfg))
+        mat += ["--FeatureMatching.rig_verification", "1"]
+        rig_args = ["--Mapper.ba_refine_sensor_from_rig", "0", "--Mapper.ba_refine_focal_length", "0",
+                    "--Mapper.ba_refine_extra_params", "0"]
+        mapper = "incremental"  # 리그는 증분 매퍼가 안정적
+    if rig and len(list(image_dir.rglob("*.jpg"))) > 400:
+        run("sequential_matcher", "--database_path", str(db), *mat, "--SequentialMatching.overlap", "8",
+            "--SequentialMatching.quadratic_overlap", "1", "--SequentialMatching.expand_rig_images", "1")
+    elif sequential:
         run("sequential_matcher", "--database_path", str(db), *mat,
             "--SequentialMatching.overlap", "15", "--SequentialMatching.quadratic_overlap", "1")
     else:
@@ -69,7 +116,7 @@ def _run_cli(colmap: str, image_dir: Path, work: Path, sequential: bool, single_
             *(["--GlobalMapper.ba_ceres_use_gpu", "1", "--GlobalMapper.gp_use_gpu", "1"] if use_gpu else []))
     else:
         run("mapper", "--database_path", str(db), "--image_path", str(image_dir),
-            "--output_path", str(sparse), "--Mapper.ba_refine_principal_point", "0",
+            "--output_path", str(sparse), "--Mapper.ba_refine_principal_point", "0", *rig_args,
             *(["--Mapper.ba_use_gpu", "1"] if use_gpu else []))
     logf.close()
     return [pycolmap.Reconstruction(d) for d in sorted(sparse.iterdir()) if (d / "images.bin").exists()]
@@ -79,23 +126,25 @@ def run_sfm(image_dir: Path, work: Path, sequential: bool, single_camera: bool =
             camera_model: str = "OPENCV", mapper: str = "incremental", use_gpu: bool = False,
             colmap_bin: str | None = None, features: str = "sift", mask_dir: Path | None = None,
             refine_pp: bool = False, robust: bool = True, max_side: int = 3200,
-            max_features: int = 12000, camera_params: str | None = None,
+            max_features: int = 12000, camera_params: str | None = None, rig: list | None = None,
             log=print) -> tuple[pycolmap.Reconstruction, dict]:
     work.mkdir(parents=True, exist_ok=True)
     db = work / "database.db"
     if db.exists():
         db.unlink()
-    n_imgs = len([p for p in image_dir.iterdir() if p.is_file()])
+    n_imgs = len([p for p in image_dir.rglob("*") if p.is_file() and p.suffix.lower() in (".jpg", ".jpeg", ".png")])
     if colmap_bin:
         sparse = work / "sparse"
         if sparse.exists():
             shutil.rmtree(sparse)
         recs = _run_cli(colmap_bin, image_dir, work, sequential, single_camera, camera_model,
                         mapper, use_gpu, log, features=features, mask_dir=mask_dir,
-                        max_side=max_side, max_features=max_features, camera_params=camera_params)
+                        max_side=max_side, max_features=max_features, camera_params=camera_params,
+                        rig=rig)
         if not recs:
             raise RuntimeError("SfM 실패: 이미지 간 겹침이 부족합니다(사진 간 60~80% 겹치게 촬영)")
-        return _finish(dict(enumerate(recs)), n_imgs, log, refine_pp, robust)
+        return _finish(dict(enumerate(recs)), n_imgs, log, refine_pp, robust,
+                       min_img_points=25 if rig else 60)
     device = pycolmap.Device.cuda if (use_gpu and pycolmap.has_cuda) else pycolmap.Device.cpu
 
     ext = pycolmap.FeatureExtractionOptions()
@@ -120,22 +169,36 @@ def run_sfm(image_dir: Path, work: Path, sequential: bool, single_camera: bool =
         reader.mask_path = str(mask_dir)
     log(f"  특징점 추출 ({n_imgs}장, {device.name})")
     pycolmap.extract_features(db, image_dir, camera_mode=(
+        pycolmap.CameraMode.PER_FOLDER if rig else
         pycolmap.CameraMode.SINGLE if single_camera else pycolmap.CameraMode.AUTO),
         reader_options=reader, extraction_options=ext, device=device)
+    if rig:
+        _apply_rig(db, rig)
+        mopt.rig_verification = True
+        mapper = "incremental"
+        log(f"  360° 리그: {len(rig)}방향을 한 위치로 묶음")
 
     tv = pycolmap.TwoViewGeometryOptions()
     if robust:
         # 반복 패턴(조적·거푸집·비계)에서 생기는 잘못된 짝을 거른다
         tv.min_num_inliers = 40
         tv.use_degensac = True
-    if sequential:
+    if rig and n_imgs > 400:
+        log("  매칭: 360 리그 순차(위치 순서, 리그 확장)")
+        so = pycolmap.SequentialPairingOptions()
+        so.overlap = 8
+        so.quadratic_overlap = True
+        so.expand_rig_images = True
+        pycolmap.match_sequential(db, matching_options=mopt, pairing_options=so,
+                                  verification_options=tv, device=device)
+    elif sequential:
         log("  매칭: 순차(동영상) + 루프 검출 없음, overlap=15")
         so = pycolmap.SequentialPairingOptions()
         so.overlap = 15
         so.quadratic_overlap = True
         pycolmap.match_sequential(db, matching_options=mopt, pairing_options=so,
                                   verification_options=tv, device=device)
-    elif n_imgs <= 300:
+    elif n_imgs <= (500 if rig else 300):
         log("  매칭: 전수(exhaustive)")
         pycolmap.match_exhaustive(db, matching_options=mopt, verification_options=tv, device=device)
     else:
@@ -155,13 +218,17 @@ def run_sfm(image_dir: Path, work: Path, sequential: bool, single_camera: bool =
     else:
         opts = pycolmap.IncrementalPipelineOptions()
         opts.ba_refine_principal_point = False  # 초기 매핑 중에는 고정(불안정 방지)
+        if rig:  # 360 에서 자른 사진: 렌즈·방향 관계를 정확히 앎 → 고정
+            opts.ba_refine_sensor_from_rig = False
+            opts.ba_refine_focal_length = False
+            opts.ba_refine_extra_params = False
         if robust:
-            opts.min_num_matches = 30
-            opts.mapper.abs_pose_min_num_inliers = 60
+            opts.min_num_matches = 15 if rig else 30
+            opts.mapper.abs_pose_min_num_inliers = 30 if rig else 60
         recs = pycolmap.incremental_mapping(db, image_dir, sparse, options=opts)
     if not recs:
         raise RuntimeError("SfM 실패: 이미지 간 겹침이 부족합니다(사진 간 60~80% 겹치게 촬영)")
-    return _finish(recs, n_imgs, log, refine_pp, robust)
+    return _finish(recs, n_imgs, log, refine_pp, robust, min_img_points=25 if rig else 60)
 
 
 def reject_bad_images(rec: pycolmap.Reconstruction, min_points: int = 60, log=print) -> list[str]:
@@ -173,12 +240,19 @@ def reject_bad_images(rec: pycolmap.Reconstruction, min_points: int = 60, log=pr
     med = np.median(C, 0)
     d = np.linalg.norm(C - med, axis=1)
     lim = 20 * max(np.median(d), 1e-9)
-    bad = [i for i, di in zip(ids, d) if rec.image(i).num_points3D < min_points or di > lim]
-    names = []
-    for i in bad:
+    # 프레임(360 리그면 한 위치의 10방향) 단위로 판정 — 하늘을 향한 한 방향의 점이 적어도 위치 전체는 정상
+    frames: dict = {}
+    for i, di in zip(ids, d):
         im = rec.image(i)
-        names.append(im.name)
-        rec.deregister_frame(im.frame_id)
+        f = frames.setdefault(im.frame_id, {"pts": 0, "far": False, "names": []})
+        f["pts"] += im.num_points3D
+        f["far"] |= di > lim
+        f["names"].append(im.name)
+    names = []
+    for fid, f in frames.items():
+        if f["pts"] < min_points or f["far"]:
+            names += f["names"]
+            rec.deregister_frame(fid)
     if names:
         log(f"  잘못 등록 의심 {len(names)}장 제외: {', '.join(names[:8])}{'…' if len(names) > 8 else ''}")
     return names
@@ -238,10 +312,10 @@ def _all_names(recs: dict) -> list[str]:
 
 
 def _finish(recs: dict, n_imgs: int, log, refine_pp: bool = False,
-            robust: bool = True) -> tuple[pycolmap.Reconstruction, dict]:
+            robust: bool = True, min_img_points: int = 60) -> tuple[pycolmap.Reconstruction, dict]:
     # 가장 큰 모델 선택
     rec = max(recs.values(), key=lambda r: r.num_reg_images())
-    rejected = reject_bad_images(rec, log=log) if robust else []
+    rejected = reject_bad_images(rec, min_points=min_img_points, log=log) if robust else []
     # 최종 전체 BA (렌즈 파라미터 포함)
     ba = pycolmap.BundleAdjustmentOptions()
     ba.refine_principal_point = False
