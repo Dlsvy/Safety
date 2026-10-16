@@ -270,6 +270,25 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         p = unquote(urlparse(self.path).path)
         try:
+            if p == "/api/browse":  # 이 PC 에서만: 윈도우 폴더 선택 창
+                if self.client_address[0] not in ("127.0.0.1", "::1"):
+                    return self._json({"error": "PC 에서만 쓸 수 있습니다"}, 403)
+                code = ("import tkinter as t, tkinter.filedialog as f; r=t.Tk(); r.withdraw(); "
+                        "r.attributes('-topmost', True); print(f.askdirectory(title='사진 폴더 고르기') or '')")
+                r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                                   encoding="utf-8", env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+                path = (r.stdout or "").strip()
+                if not path:
+                    return self._json({"path": None})
+                pp = Path(path)
+                direct = lambda d: [q for q in d.iterdir() if q.is_file() and q.suffix.lower() in MEDIA]
+                if not direct(pp):  # 상위 폴더를 고른 경우: 사진이 든 하위 폴더(예: images)를 쓴다
+                    subs = sorted((d for d in pp.rglob("*") if d.is_dir() and direct(d)),
+                                  key=lambda d: (d.name.lower() != "images", -len(direct(d))))
+                    if subs:
+                        pp = subs[0]
+                cnt = len(direct(pp))
+                return self._json({"path": str(pp), "name": pp.name if pp.name.lower() not in ("images", "image", "photos") else pp.parent.name, "count": cnt})
             if p == "/api/samples/download":
                 if _sample_dl["state"] != "running":
                     threading.Thread(target=download_samples, daemon=True).start()

@@ -37,7 +37,9 @@ button,.btn{font:inherit;font-weight:600;border:1px solid var(--line);background
 button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
 button:disabled{opacity:.5;cursor:default}
 button:focus-visible,.btn:focus-visible,input:focus-visible{outline:2px solid var(--run);outline-offset:2px}
-.pick{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
+.pick{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:12px 0}
+@media (max-width:560px){.pick{grid-template-columns:1fr 1fr}}
+.pickpc{margin:-2px 0 10px;font-size:13px}
 .pick label{border:1.5px dashed var(--line);border-radius:10px;padding:16px;text-align:center;cursor:pointer;color:var(--muted)}
 .pick label strong{display:block;color:var(--ink);font-size:15px}
 .pick input{display:none}
@@ -101,11 +103,14 @@ details input{margin-top:6px;width:100%}
     <h2 id="newh">새 3D 만들기</h2>
     <div class="row"><input id="name" type="text" placeholder="현장 이름 (예: 3공구 북측 옹벽)" autocomplete="off"></div>
     <div class="pick">
-      <label for="files"><strong>사진·영상 고르기</strong>여러 장 선택 가능</label>
+      <label for="files"><strong>파일 고르기</strong>사진·영상 여러 장</label>
       <input id="files" type="file" accept="image/*,video/*" multiple>
+      <label for="folder"><strong>폴더 고르기</strong>폴더 안 사진 전부</label>
+      <input id="folder" type="file" webkitdirectory directory multiple>
       <label for="cam"><strong>카메라로 찍기</strong>폰에서 바로 촬영</label>
       <input id="cam" type="file" accept="image/*,video/*" capture="environment" multiple>
     </div>
+    <div class="pickpc" id="pickpc" hidden><button type="button" id="browse">PC 폴더 바로 쓰기 (올리기 없이 빠름)</button></div>
     <div class="samples" id="samples"></div>
     <div class="chosen" id="chosen">선택한 파일 없음 · 한쪽 면은 5~6장, 한 바퀴는 15~20장, 또는 1~2분 영상</div>
     <div class="mode" role="radiogroup" aria-label="품질">
@@ -162,6 +167,29 @@ function setPicked(list) {
 function updateGo(){ $("go").disabled = !(picked.length || $("lpath").value.trim()); }
 $("files").onchange = (e) => setPicked(e.target.files);
 $("cam").onchange = (e) => setPicked([...picked, ...e.target.files]);
+const MEDIA_RE = /\.(jpe?g|png|heic|tiff?|webp|mp4|mov|m4v|avi|mkv)$/i;
+$("folder").onchange = (e) => {   // 폴더 안(하위 폴더 포함)의 사진·영상만
+  const fs = [...e.target.files].filter((f) => MEDIA_RE.test(f.name));
+  if (!fs.length) { $("msg").textContent = "그 폴더에 사진·영상이 없습니다"; return; }
+  const dir = (fs[0].webkitRelativePath || "").split("/")[0];
+  if (dir && !$("name").value) $("name").value = dir;
+  setPicked(fs);
+};
+// 이 PC 에서 연 경우: 윈도우 폴더 창으로 고르고 올리기 없이 바로 처리
+if (["localhost", "127.0.0.1"].includes(location.hostname)) $("pickpc").hidden = false;
+$("browse").onclick = async () => {
+  $("browse").disabled = true; $("msg").textContent = "폴더 선택 창이 열렸습니다(작업표시줄을 확인하세요)";
+  try {
+    const d = await api("/api/browse", {method: "POST"});
+    if (d.path) {
+      $("lpath").value = d.path; sampleSel = null; setPicked([]);
+      if (!$("name").value) $("name").value = d.name;
+      $("chosen").textContent = `PC 폴더: ${d.path} (사진·영상 ${d.count}개)`;
+      $("msg").textContent = ""; updateGo(); loadSamples();
+    } else $("msg").textContent = "";
+  } catch (e) { $("msg").textContent = "오류: " + e.message; }
+  $("browse").disabled = false;
+};
 $("lpath").oninput = updateGo;
 
 let sampleSel = null;
@@ -223,7 +251,7 @@ $("go").onclick = async () => {
     }
     await api(`/api/jobs/${job.id}/start`, {method:"POST"});
     $("msg").textContent = "처리를 시작했습니다. 아래 목록에서 진행 상황을 볼 수 있습니다.";
-    setPicked([]); $("files").value = ""; $("cam").value = ""; $("name").value = ""; $("lpath").value = ""; sampleSel = null; loadSamples();
+    setPicked([]); $("files").value = ""; $("cam").value = ""; $("folder").value = ""; $("name").value = ""; $("lpath").value = ""; sampleSel = null; loadSamples();
     refresh();
   } catch (e) { $("msg").textContent = "오류: " + e.message; }
   $("prog").style.width = "0"; updateGo();
