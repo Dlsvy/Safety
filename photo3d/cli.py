@@ -218,14 +218,28 @@ def run(a) -> dict:
     rep["model"] = info
     if floor:
         rep["floor_patch"] = floor
+    main_mesh = None
+
+    def cleaned():
+        """GLB 와 같은 정리본 메쉬(바닥 조각 제외, Z-up) — 한 번만 읽는다"""
+        nonlocal main_mesh
+        if main_mesh is None:
+            from .export import _load
+            main_mesh = _load(out / "site_model_zup.obj") if not extra else None
+            if main_mesh is None:  # 바닥 조각이 붙은 OBJ 는 재료가 둘 → 본 메쉬는 GLB 와 같은 정리본을 다시 읽음
+                main_mesh = export.clean_mesh(_load(Path(res["textured_obj"])),
+                                              cams if not geo["method"].startswith("none") else None, log=lambda *_: None)
+        return main_mesh
+    if info["faces"] > a.light_over and (work / "dense" / "sparse").exists():
+        try:  # 면이 너무 많으면 보기용 가벼운 모델을 따로(유니티·웹·VR)
+            rep["model"]["light"] = export.light_model(cleaned(), work / "dense" / "sparse", work / "dense" / "images",
+                                                       out, extra=extra, faces=a.light_faces, log=log)
+        except Exception as e:
+            log(f"  가벼운 모델 생략: {e}")
     if a.pipeline == "pg":  # 측량형 결과물: 정사영상·DSM·LAS 점군
         try:
             from . import survey
-            from .export import _load
-            m = _load(out / "site_model_zup.obj") if not extra else None
-            if m is None:  # 바닥 조각이 붙은 OBJ 는 재료가 둘 → 본 메쉬는 GLB 와 같은 정리본을 다시 읽음
-                m = export.clean_mesh(_load(Path(res["textured_obj"])), cams if not geo["method"].startswith("none") else None,
-                                      log=lambda *_: None)
+            m = cleaned()
             zc = survey.plan_cut_height([m], cams if len(cams) else None)
             rep["survey"] = {"ortho": survey.ortho_dsm([m] + extra, out, z_cut=zc, log=log)}
             if dense_pts:
@@ -351,6 +365,8 @@ def main(argv=None):
     r.add_argument("--max-side", type=int, default=3200, help="입력 이미지 긴 변 최대 픽셀")
     r.add_argument("--video-frames", type=int, default=150)
     r.add_argument("--collider-faces", type=int, default=150_000)
+    r.add_argument("--light-over", type=int, default=1_500_000, help="면이 이보다 많으면 보기용 가벼운 모델(site_model_light.glb)도 만듦")
+    r.add_argument("--light-faces", type=int, default=600_000, help="가벼운 모델의 면 수")
     r.add_argument("--features", default="sift", choices=["sift", "sift_hq", "sift_lg", "aliked"],
                    help="sift(기본, 실사 벤치마크에서 가장 균형) / sift_hq(DSP+어파인, 2~7배 느림, 장면따라 ±) / aliked(ALIKED+LightGlue, ONNX 지원 COLMAP 필요)")
     r.add_argument("--no-robust", action="store_true",

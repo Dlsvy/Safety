@@ -17,14 +17,16 @@ namespace Photo3D.EditorTools
             string name = new DirectoryInfo(src).Name;
             string dstRel = $"Assets/Photo3DSites/{name}";
             Directory.CreateDirectory(dstRel);
-            foreach (var f in new[] { "site_model.glb", "site_collider.glb", "site_estimated.glb", "site_filled.glb", "site_splat.ply",
+            foreach (var f in new[] { "site_model.glb", "site_model_light.glb", "site_collider.glb", "site_estimated.glb", "site_filled.glb", "site_splat.ply",
                                        "site_meta.json", "report.json", "quality_report.html", "annotations.json", "cameras.json" })
             {
                 var p = Path.Combine(src, f);
                 if (File.Exists(p)) File.Copy(p, Path.Combine(dstRel, f), true);
             }
             AssetDatabase.Refresh();
-            var vis = AssetDatabase.LoadAssetAtPath<GameObject>($"{dstRel}/site_model.glb");
+            // 면이 많은 현장은 보기용 가벼운 모델(사진 텍스처 다시 구움)을 쓴다 — 충돌·측정은 site_collider.glb
+            var vis = AssetDatabase.LoadAssetAtPath<GameObject>($"{dstRel}/site_model_light.glb")
+                      ?? AssetDatabase.LoadAssetAtPath<GameObject>($"{dstRel}/site_model.glb");
             var col = AssetDatabase.LoadAssetAtPath<GameObject>($"{dstRel}/site_collider.glb");
             if (vis == null || col == null)
             {

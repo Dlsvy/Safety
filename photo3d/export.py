@@ -149,13 +149,40 @@ def clean_mesh(mesh: trimesh.Trimesh, cam_centers: np.ndarray | None,
 
 
 def decimate(mesh: trimesh.Trimesh, target_faces: int) -> trimesh.Trimesh:
+    # 텍스처 메쉬(OBJ)는 UV 이음새마다 정점이 따로라 그대로 줄이면 모든 이음새가 찢어진다
+    # (충돌 메쉬 경계 모서리가 면 수의 1.6~2.4배였음) → 같은 위치 정점을 먼저 합친다
+    mesh = trimesh.Trimesh(mesh.vertices, mesh.faces, process=True)
     if len(mesh.faces) <= target_faces:
-        return trimesh.Trimesh(mesh.vertices.copy(), mesh.faces.copy(), process=True)
+        return mesh
     import fast_simplification
     ratio = 1 - target_faces / len(mesh.faces)
     v, f = fast_simplification.simplify(mesh.vertices.astype(np.float32),
                                         mesh.faces.astype(np.int32), target_reduction=ratio)
     return trimesh.Trimesh(v, f, process=True)
+
+
+def light_model(mesh: trimesh.Trimesh, sparse: Path, img_dir: Path, out: Path, extra: list | None = None,
+                faces: int = 600_000, atlas: int = 8192, log=print) -> dict | None:
+    """보기용 가벼운 모델: 면을 줄인 뒤 사진에서 텍스처를 다시 굽는다(줄이면 원래 UV 가 깨지므로).
+    측정·충돌은 원본(site_model.glb·site_collider.glb)을 쓰고 이것은 유니티·웹 보기·VR 용."""
+    from .texture import bake
+    src = mesh.copy()
+    if src.visual.kind != "vertex":  # 텍스처 메쉬 → 정점 색(사진에 안 보인 면의 대체 색)
+        src.visual = src.visual.to_color()
+    lm, _ = bake(src, sparse, img_dir, atlas=atlas, max_faces=faces, log=log)
+    sc = trimesh.Scene()
+    g = lm.copy()
+    g.apply_transform(ZUP_TO_YUP)
+    sc.add_geometry(g, geom_name="site")
+    for i, e in enumerate(extra or []):
+        e2 = e.copy()
+        e2.apply_transform(ZUP_TO_YUP)
+        sc.add_geometry(e2, geom_name=f"photo_floor_{i}")
+    p = out / "site_model_light.glb"
+    sc.export(p)
+    mb = p.stat().st_size / 1e6
+    log(f"  보기용 가벼운 모델: 면 {len(mesh.faces):,} → {len(lm.faces):,} ({mb:.0f} MB) site_model_light.glb")
+    return {"file": p.name, "faces": int(len(lm.faces)), "mb": round(mb, 1)}
 
 
 def export_all(textured_obj: Path, out: Path, cam_centers: np.ndarray | None,

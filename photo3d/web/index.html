@@ -742,7 +742,8 @@ function frameBox(box) {
 }
 async function loadModel(frame) {
   if (useSplat) return loadSplat(frame);
-  const j = curJob, file = useFill ? "site_filled.glb" : "site_model.glb";
+  // 면이 많은 모델은 보기용 가벼운 모델로(측정·내려받기는 원본)
+  const j = curJob, file = useFill ? "site_filled.glb" : (j.has_light ? "site_model_light.glb" : "site_model.glb");
   $("vinfo").textContent = "불러오는 중…";
   await clearScene();
   await new Promise((res) => new GLTFLoader().load(`/files/${j.id}/${file}`, (g) => {

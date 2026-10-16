@@ -467,6 +467,7 @@ def job_view(job: dict) -> dict:
         except Exception:
             pass
     v["has_model"] = (d / "out" / "site_model.glb").exists()
+    v["has_light"] = (d / "out" / "site_model_light.glb").exists()
     v["has_filled"] = (d / "out" / "site_filled.glb").exists()
     v["has_est"] = (d / "out" / "site_estimated.glb").exists()
     v["has_splat"] = (d / "out" / "site_splat.ply").exists()
