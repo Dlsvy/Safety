@@ -193,7 +193,8 @@ def start_splat_spirula(dense: Path, exe: str, steps: int = 30000, max_res: int 
     train = [exe, "train", "centered-object" if subject else "3dgs", "--data", str(data), "--num-iterations", str(steps), "--disable-viewer", "1",
              "--scene-center", "none", "--seed-pointcloud", "init.ply", "--cap-max", cap,
              "--floater-suppression", "mild", "--train-resolution-divisor", str(div),
-             "--output-dir-prefix", str(runs), "--output-dir-name", "run"] \
+             "--output-dir-prefix", str(runs), "--output-dir-name", "run",
+             "--steps-per-save", os.environ.get("PHOTO3D_SPIRULA_SAVE", "2000")] \
         + (["--depth-supervision-weight", "0.05"] if depth_sup else [])  # 최고 품질: 깊이도 지도(흰 벽 평평하게)
     log(f"  $ spirula train --total-steps {steps} (표면 방향 지도 → 학습, 해상도 1/{div}, 최대 {int(cap):,}개, 백그라운드 GPU)")
     logf = open(work / "brush.log", "w", encoding="utf-8", errors="replace")  # 진행 표시가 같은 파일을 읽음

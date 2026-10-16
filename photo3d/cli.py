@@ -56,8 +56,10 @@ def run(a) -> dict:
             os.environ["PHOTO3D_SPIRULA_CAP"] = str(sp_cap)
             os.environ["PHOTO3D_SPIRULA_STEPS"] = str(sp_steps)
             os.environ["PHOTO3D_SPIRULA_RES"] = "3200"
-        else:
+        else:  # 빠르게: 더 많이 학습(1만5천 스텝)하되 본 처리 끝난 뒤 최대 5분만 기다리고 마지막 저장본 사용
             os.environ["PHOTO3D_SPIRULA_CAP"] = str(max(1_000_000, cap))
+            os.environ["PHOTO3D_SPIRULA_STEPS"] = "15000"
+            os.environ["PHOTO3D_SPIRULA_SAVE"] = "1000"
         os.environ["PHOTO3D_MOGE"] = plan["moge"]
         os.environ["PHOTO3D_MOGE_SIDE"] = str(plan["moge_side"])
         if a.splat_res == 1920:
