@@ -385,6 +385,7 @@ def job_view(job: dict) -> dict:
 def worker() -> None:
     while True:
         jid = _queue.get()
+        _CURRENT.update(id=jid, t=time.time())
         try:
             run_job(jid)
         except Exception as e:  # 작업자가 죽지 않게
@@ -394,6 +395,8 @@ def worker() -> None:
                 save_job(job)
             except Exception:
                 pass
+        finally:
+            _CURRENT.update(id=None, t=0)
 
 
 def run_job(jid: str) -> None:
@@ -407,13 +410,12 @@ def run_job(jid: str) -> None:
     job.update(status="running", started=time.time())
     save_job(job)
     tools = find_tools()
-    t_wait = time.time()
-    if _PRIOR["state"] in ("확인 전", "준비 중"):
+    # 흰 벽 채우기 준비(PyTorch·모델 설치)가 아직이면 기다리지 않고 그 기능만 빼고 바로 처리(예전: 최대 30분 대기 → '대기'로 멈춘 듯 보임)
+    no_prior = _PRIOR["state"] != "준비됨"
+    if no_prior and _PRIOR["state"] in ("확인 전", "준비 중"):
         (d / "out").mkdir(parents=True, exist_ok=True)
         with open(d / "out" / "run.log", "a", encoding="utf-8") as f:
-            f.write("[    0.0s] 흰 벽 채우기 준비(처음 한 번 PyTorch·깊이 모델 설치) 끝나기를 기다리는 중…\n")
-    while _PRIOR["state"] in ("확인 전", "준비 중") and time.time() - t_wait < 1800:
-        time.sleep(3)  # 앱 시작 직후: 흰 벽 채우기 준비(설치)가 끝난 뒤 처리 시작 — 두 곳에서 동시에 설치하지 않게
+            f.write("[    0.0s] 흰 벽 채우기 준비가 아직 끝나지 않아 이번 처리에서는 빼고 진행합니다\n")
     env = dict(os.environ)
     if tools["openmvs"]:
         env["OPENMVS_BIN"] = tools["openmvs"]
@@ -431,6 +433,8 @@ def run_job(jid: str) -> None:
         cmd += ["--subject"]
     if resume:  # 이어서 처리: 끝난 단계·계산한 깊이 지도·점군 재사용
         cmd += ["--resume"]
+    if no_prior:
+        cmd += ["--no-prior"]
     if job.get("marker_size"):
         cmd += ["--marker-size", str(job["marker_size"])]
     with open(d / "console.log", "a" if resume else "w", encoding="utf-8") as f:
@@ -453,6 +457,7 @@ def run_job(jid: str) -> None:
 
 
 _RUNNING: dict = {}   # 작업 id → 실행 중인 처리 프로세스
+_CURRENT: dict = {"id": None, "t": 0}  # 작업자가 지금 맡은 작업
 _STOPPED: set = set()
 
 
@@ -703,8 +708,9 @@ class Handler(BaseHTTPRequestHandler):
                 for k, j in enumerate(waiting):
                     if run:
                         j["wait_info"] = f"'{run[0]['name']}' 처리가 끝나면 시작합니다" + (f" (대기 {k + 1}번째)" if k else "")
-                    elif _PRIOR["state"] in ("확인 전", "준비 중"):
-                        j["wait_info"] = "흰 벽 채우기 준비(처음 한 번 PyTorch·깊이 모델 설치) 중 — 끝나면 시작합니다"
+                    elif _CURRENT["id"] and _CURRENT["id"] not in {x["id"] for x in jobs}:
+                        j["wait_info"] = "지워진 이전 작업을 정리하는 중 — 잠시 후 시작합니다"
+                        stop_job(_CURRENT["id"])
                     else:
                         j["wait_info"] = "곧 시작합니다"
                 return self._json({"jobs": jobs, "tools": find_tools(), "lan": lan_urls()})
