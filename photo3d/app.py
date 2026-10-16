@@ -545,7 +545,11 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/gpu":
                 from . import gpu
                 g = gpu.query()
-                exes = [str(Path(sys.executable).resolve())] + [x for x in (find_tools()["colmap"],) if x]
+                exes = [str(Path(sys.executable).resolve())]
+                cb = find_tools()["colmap"]
+                if cb:  # COLMAP.bat 이 아니라 실제로 GPU 를 쓰는 bin\colmap.exe 를 본다
+                    exe = Path(cb).parent / "bin" / "colmap.exe"
+                    exes.append(str(exe if exe.exists() else Path(cb)))
                 from .splat import find_brush
                 b = find_brush(ROOT, download=False)
                 if b:

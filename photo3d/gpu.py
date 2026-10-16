@@ -26,10 +26,18 @@ def nvidia_smi() -> str | None:
     return None
 
 
-def _run(args: list[str], timeout: float = 5) -> str:
-    r = subprocess.run(args, capture_output=True, text=True, timeout=timeout, encoding="utf-8", errors="replace",
+def _run(args: list[str], timeout: float = 5, enc: str = "utf-8") -> str:
+    r = subprocess.run(args, capture_output=True, text=True, timeout=timeout, encoding=enc, errors="replace",
                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     return r.stdout
+
+
+POWER_PLANS = {  # 윈도우 기본 전원 계획 GUID(언어와 무관하게 판정)
+    "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c": "고성능",
+    "e9a42b02-d5df-448d-aa00-03f14749eb61": "최고의 성능",
+    "381b4222-f694-41f0-9685-ff5bb260df2e": "균형 조정",
+    "a1841308-3541-4fab-bc81-f71556f20b4a": "절전",
+}
 
 
 def query() -> dict | None:
@@ -54,7 +62,7 @@ def query() -> dict | None:
     try:  # CUDA 버전은 기본 출력 머리글에만 있다
         head = _run([smi])
         import re
-        m = re.search(r"CUDA Version:\s*([\d.]+)", head)
+        m = re.search(r"CUDA[A-Za-z ]*Version:\s*([\d.]+)", head)  # 드라이버마다 표기가 조금씩 다름
         out["cuda_version"] = m.group(1) if m else None
     except Exception:
         out["cuda_version"] = None
@@ -98,9 +106,13 @@ def windows_settings(exes: list[str] | None = None) -> dict:
     s = {"tdr_delay": _reg(GFX, "TdrDelay"), "tdr_ddi_delay": _reg(GFX, "TdrDdiDelay"),
          "tdr_level": _reg(GFX, "TdrLevel"), "hags": _reg(GFX, "HwSchMode")}
     try:
-        plan = _run(["powercfg", "/getactivescheme"])
-        s["power_plan"] = plan.strip().split("(")[-1].rstrip(")") if "(" in plan else plan.strip()
-        s["power_plan_guid"] = plan.split(":")[1].split()[0] if ":" in plan else None
+        import re
+        plan = _run(["powercfg", "/getactivescheme"], enc="mbcs")  # 한글 윈도우 출력은 CP949
+        m = re.search(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", plan, re.I)
+        guid = m.group(1).lower() if m else None
+        name = plan.strip().split("(")[-1].rstrip(")").strip() if "(" in plan else ""
+        s["power_plan_guid"] = guid
+        s["power_plan"] = POWER_PLANS.get(guid) or name or None
     except Exception:
         s["power_plan"] = None
     if exes:
@@ -128,7 +140,7 @@ def checks(g: dict | None, w: dict) -> list[dict]:
     elif drv and drv < 580:
         add("warn", "드라이버", g["driver"], "CUDA 13 으로 빌드된 COLMAP 은 580 이상 필요(NVIDIA CUDA 릴리스 노트) — 최신 드라이버 권장")
     else:
-        add("ok", "드라이버", f"{g.get('driver')} (CUDA {g.get('cuda')}, 연산능력 {g.get('compute_cap')})")
+        add("ok", "드라이버", f"{g.get('driver')} (CUDA {g.get('cuda') or '표시 안 됨'}, 연산능력 {g.get('compute_cap')})")
     if g.get("pcie_gen") and g.get("pcie_gen_max") and g.get("util", 0) > 30 and g["pcie_gen"] < g["pcie_gen_max"]:
         add("warn", "PCIe 연결", f"Gen{g['pcie_gen']:.0f} x{g.get('pcie_width') or 0:.0f} (최대 Gen{g['pcie_gen_max']:.0f})",
             "그래픽카드가 메인보드 첫 번째 x16 슬롯에 꽂혀 있는지 확인")
