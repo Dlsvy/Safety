@@ -88,10 +88,11 @@ def _growth_flags(brush: str, steps: int) -> list[str]:
                            encoding="utf-8", errors="replace").stdout
     except Exception:
         return []
+    # 주의: Brush v0.3.0 의 growth-grad-threshold 기본값은 0.00004(main 브랜치와 단위가 다름). 예전에 0.0015 를 넣어
+    # 증식이 거의 막혔다(PC '집' 10만 개·바늘 모양) → 기본값을 쓰고 상한·선택 비율만 조정
     want = [("--max-splats", os.environ.get("PHOTO3D_MAX_SPLATS", "3000000")),  # VRAM 맞춤(8GB 300만)
-            ("--growth-grad-threshold", "0.0015"),   # 기본 0.0025 → 더 쉽게 증식
-            ("--growth-select-fraction", "0.4"),
-            ("--growth-stop-iter", str(int(steps * 0.7)))]
+            ("--growth-select-fraction", "0.2"),     # 기본 0.1 → 더 많이 증식
+            ("--growth-stop-iter", str(int(steps * 0.8)))]
     out = []
     for k, v in want:
         if k in h:

@@ -369,6 +369,9 @@ def run_job(jid: str) -> None:
     job.update(status="running", started=time.time())
     save_job(job)
     tools = find_tools()
+    t_wait = time.time()
+    while _PRIOR["state"] in ("확인 전", "준비 중") and time.time() - t_wait < 1800:
+        time.sleep(3)  # 앱 시작 직후: 흰 벽 채우기 준비(설치)가 끝난 뒤 처리 시작 — 두 곳에서 동시에 설치하지 않게
     env = dict(os.environ)
     if tools["openmvs"]:
         env["OPENMVS_BIN"] = tools["openmvs"]
@@ -572,7 +575,10 @@ class Handler(BaseHTTPRequestHandler):
                 if b:
                     exes.append(str(Path(b).resolve()))
                 w = gpu.windows_settings(exes)
-                return self._json({"gpu": g, "windows": w, "checks": gpu.checks(g, w),
+                ck = gpu.checks(g, w)
+                lv = {"준비됨": "ok", "준비 중": "info", "실패": "bad"}.get(_PRIOR["state"], "info")
+                ck.append({"level": lv, "item": "흰 벽 채우기(깊이 모델)", "value": _PRIOR["state"], "fix": _PRIOR["msg"]})
+                return self._json({"gpu": g, "windows": w, "checks": ck,
                                    "plan": gpu.vram_plan(g.get("mem_free_mb"), g.get("mem_total_mb")) if g and g.get("mem_total_mb") else None})
             if p == "/api/sys":
                 return self._json(system_usage())
@@ -765,6 +771,35 @@ def _no_quickedit() -> None:
         pass
 
 
+_PRIOR = {"state": "확인 전", "msg": ""}
+
+
+def prepare_prior() -> None:
+    """앱 시작 시 흰 벽 채우기(MoGe-2)에 필요한 PyTorch(GPU)·MoGe·모델 파일을 미리 준비 — 첫 처리 때
+    설치하느라 실패·건너뛰는 일이 없게(PC '집': 흰 벽 채우기가 돌지 않아 벽이 비었음)"""
+    from . import gpu
+    if not gpu.nvidia_smi():
+        _PRIOR.update(state="해당 없음", msg="NVIDIA GPU 없음 → CPU 처리에서는 사용 안 함")
+        return
+    _PRIOR.update(state="준비 중", msg="PyTorch(GPU)·MoGe-2 확인/설치 중 — 처음 한 번 수 분")
+    msgs = []
+    try:
+        from . import priorfill
+        if not priorfill.ensure_installed(msgs.append):
+            _PRIOR.update(state="실패", msg="설치 실패: " + " / ".join(msgs[-2:]))
+            return
+        import torch
+        if not torch.cuda.is_available():
+            _PRIOR.update(state="실패", msg=f"PyTorch 가 GPU 를 못 찾음(torch {torch.__version__}) — CUDA 판 재설치 필요")
+            return
+        _PRIOR.update(msg="깊이 모델 파일 내려받는 중(약 1.3GB, 처음 한 번)")
+        from huggingface_hub import snapshot_download
+        snapshot_download("Ruicheng/moge-2-vitl-normal")
+        _PRIOR.update(state="준비됨", msg=f"PyTorch {torch.__version__} · {torch.cuda.get_device_name(0)}")
+    except Exception as e:
+        _PRIOR.update(state="실패", msg=str(e)[:200])
+
+
 def main():
     _no_quickedit()
     port = int(os.environ.get("PHOTO3D_PORT", "8765"))
@@ -778,6 +813,7 @@ def main():
         except Exception:
             pass
     threading.Thread(target=worker, daemon=True).start()
+    threading.Thread(target=prepare_prior, daemon=True).start()
     srv = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"photo3d 앱: http://localhost:{port}")
     for u in lan_urls(port):

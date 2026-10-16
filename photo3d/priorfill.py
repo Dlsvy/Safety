@@ -101,7 +101,13 @@ def fill(dense_xyz: np.ndarray, dense_rgb: np.ndarray | None, sparse: Path, img_
     if side is None:
         side = int(os.environ.get("PHOTO3D_MOGE_SIDE", "768" if dev == "cuda" else "640"))
     cams = _cameras(sparse, img_dir)
-    views = []
+    views, fit_stats = [], []
+    try:  # SfM 점(3장 이상에서 보인 것)도 축척 맞춤에 사용
+        import pycolmap
+        _r = pycolmap.Reconstruction(sparse)
+        sparse_xyz = np.array([p.xyz for p in _r.points3D.values() if p.track.length() >= 3]).reshape(-1, 3)
+    except Exception:
+        sparse_xyz = None
     for ci, cam in enumerate(cams):
         im = cv2.imread(str(cam["path"]), cv2.IMREAD_COLOR)
         if im is None:
@@ -121,19 +127,33 @@ def fill(dense_xyz: np.ndarray, dense_rgb: np.ndarray | None, sparse: Path, img_
         uv, z = _project({**cam, "K": K}, dense_xyz)
         Dm = _zbuffer(np.floor(uv), z, w, h)
         both = (Dm > 0) & mk
-        a, b, ok = 1.0, 0.0, False
-        if both.sum() > 200:
-            x, y = zp[both], Dm[both]
+        a, b, ok, err = 1.0, 0.0, False, None
+        # 측정 깊이: 조밀 점 + SfM 점. 흰 벽 위주 실내는 조밀 점이 사진당 수백 개뿐이라(PC '집' 2.8만 점/39장)
+        # 예전 기준(200점 이상)으로는 대부분 사진이 빠졌다 → 30점부터, 적으면 축척만 맞춘다
+        if sparse_xyz is not None and len(sparse_xyz):
+            uv2, z2 = _project({**cam, "K": K}, sparse_xyz)
+            ui, vi = np.floor(uv2[:, 0]).astype(int), np.floor(uv2[:, 1]).astype(int)
+            okp = (z2 > 0) & (ui >= 0) & (vi >= 0) & (ui < w) & (vi < h)
+            xs, ys = zp[vi[okp], ui[okp]], z2[okp]
+            m2 = mk[vi[okp], ui[okp]]
+            xs, ys = xs[m2], ys[m2]
+        else:
+            xs, ys = np.zeros(0), np.zeros(0)
+        x = np.concatenate([zp[both], xs])
+        y = np.concatenate([Dm[both], ys])
+        if len(x) >= 30:
             a = float(np.median(y / x))
             inl = np.abs(a * x - y) / y < 0.1
-            for _ in range(3):  # 강건 최소제곱(축척·이동)
-                if inl.sum() < 100:
-                    break
-                A = np.stack([x[inl], np.ones(inl.sum())], 1)
-                a, b = np.linalg.lstsq(A, y[inl], rcond=None)[0]
-                inl = np.abs(a * x + b - y) / y < 0.05
+            if len(x) >= 150:
+                for _ in range(3):  # 강건 최소제곱(축척·이동)
+                    if inl.sum() < 60:
+                        break
+                    A = np.stack([x[inl], np.ones(inl.sum())], 1)
+                    a, b = np.linalg.lstsq(A, y[inl], rcond=None)[0]
+                    inl = np.abs(a * x + b - y) / y < 0.05
             err = float(np.median(np.abs(a * x + b - y) / y))
-            ok = a > 0 and err < 0.04 and inl.mean() > 0.5
+            ok = a > 0 and err < 0.06 and inl.mean() > 0.4
+        fit_stats.append((len(x), err, ok))
         Za = np.where(mk, a * zp + b, 0).astype(np.float32)
         # 법선: 맞춘 깊이 지도를 3D 로 펴서 이웃 차분으로 계산, 카메라를 향하게
         K_ = K
@@ -148,7 +168,11 @@ def fill(dense_xyz: np.ndarray, dense_rgb: np.ndarray | None, sparse: Path, img_
         views.append({"ci": ci, "cam": cam, "K": K, "w": w, "h": h, "Za": Za, "Dm": Dm, "ok": ok, "img": small,
                       "nrm": nrm, "cover": binary_dilation(Dm > 0, iterations=3)})
     good = [v for v in views if v["ok"]]
-    log(f"  깊이 prior: 사진 {len(views)}장 중 측정과 잘 맞는 {len(good)}장 사용")
+    errs = [e for _, e, _ in fit_stats if e is not None]
+    log(f"  깊이 prior: 사진 {len(views)}장 중 측정과 잘 맞는 {len(good)}장 사용 "
+        f"(사진당 측정점 중앙 {int(np.median([n for n, _, _ in fit_stats])) if fit_stats else 0}개, "
+        f"맞춤 오차 중앙 {np.median(errs) * 100:.1f}%)" if errs else
+        f"  깊이 prior: 사진 {len(views)}장 모두 측정점이 너무 적어 맞추지 못함")
     pts, cols, nrms, nsup = [], [], [], []
     Cg = np.array([v["cam"]["C"] for v in good]) if good else np.zeros((0, 3))
     Fg = np.array([v["cam"]["R"][2] for v in good]) if good else np.zeros((0, 3))  # 보는 방향

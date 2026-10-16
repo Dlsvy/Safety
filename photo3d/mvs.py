@@ -125,8 +125,10 @@ def add_prior_points(fused: Path, dense: Path, log=print) -> int:
     try:
         from . import priorfill
         from .fill import _write_ply, read_points
+        from .pointfilter import LAST
         if not priorfill.ensure_installed(log):
             log("  깊이 prior 설치 실패 → 건너뜀")
+            LAST["prior_status"] = "설치 실패(PyTorch/MoGe) — 처리 기록 확인"
             return 0
         xyz, nrm, rgb = read_points(fused)
         pr = priorfill.fill(xyz, rgb, dense / "sparse", dense / "images", log=log)
@@ -136,11 +138,14 @@ def add_prior_points(fused: Path, dense: Path, log=print) -> int:
                 nrm = np.zeros_like(xyz)
             _write_ply(fused, np.vstack([xyz, pr["xyz"]]), np.vstack([nrm, pr["normal"]]),
                        np.vstack([rgb if rgb is not None else np.full((len(xyz), 3), 160, np.uint8), pr["rgb"]]))
-            from .pointfilter import LAST
             LAST["prior_added"] = int(n)
+        LAST["prior_status"] = f"사진 {pr.get('views_used', 0)}장 사용, {n:,}점 추가" if n else \
+            f"추가된 점 없음(측정과 맞는 사진 {pr.get('views_used', 0)}장)"
         return n
     except Exception as e:
         log(f"  깊이 prior 생략: {e}")
+        from .pointfilter import LAST
+        LAST["prior_status"] = f"오류: {str(e)[:80]}"
         return 0
 
 

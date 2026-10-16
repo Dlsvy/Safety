@@ -135,6 +135,8 @@ def write(out: Path, rep: dict, work: Path, log=print) -> Path:
     if d.get("raw"):
         k = d["kept"] / d["raw"]
         row("3D 생성", "조밀 점(정리 후)", f"{d['kept']:,}점 ({k:.0%} 유지)", INFO, f"가시·이상점 {d['raw'] - d['kept']:,}점 제거")
+    if d.get("prior_status") and not d.get("prior_added"):
+        row("3D 생성", "흰 벽 채우기(깊이 prior)", "안 됨", WARN, d["prior_status"])
     if d.get("prior_added"):
         row("3D 생성", "깊이 prior 로 채운 점", f"{d['prior_added']:,}점", INFO,
             "무늬 없는 벽·바닥을 MoGe-2 깊이로 채움(측정과 맞추고 다른 사진과 일치하는 점만)")
