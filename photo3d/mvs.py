@@ -128,6 +128,21 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
     except RuntimeError as e:
         log(f"  텍스처 실패 → 정점 색 메쉬로 대체: {e}")
     obj = mvs / "scene_textured.ply"
+    if obj.exists():
+        # 사진을 못 읽으면 TextureMesh 가 검은 아틀라스를 만든다(PC v2.4 에서 확인) → 밝기로 판정해 대체
+        try:
+            from PIL import Image
+            import numpy as np
+            pngs = sorted(mvs.glob("scene_textured*.png"))
+            if pngs:
+                im = np.asarray(Image.open(pngs[0]).convert("L").resize((256, 256)))
+                bright = float(im.mean())
+                log(f"  텍스처 평균 밝기 {bright:.0f}/255")
+                if bright < 20 and mesh.exists():
+                    log("  경고: 텍스처가 거의 검음(사진 로딩 실패 의심) → 점군 색 메쉬로 대체")
+                    obj = mesh
+        except Exception as e:
+            log(f"  텍스처 점검 생략: {e}")
     if not obj.exists():
         if engine == "colmap" and mesh.exists():
             obj = mesh  # 사진 텍스처 대신 점군 색을 입힌 메쉬

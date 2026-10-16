@@ -46,6 +46,12 @@ Push-Location $Root
     Select-String -Pattern "^\[|Error|Traceback|실패"
 Pop-Location
 Write-Host ("총 소요: {0:N1} 분" -f ((Get-Date) - $t0).TotalMinutes)
+$lf0 = Join-Path $Out "work\openmvs.log"
+if (Test-Path $lf0) {
+    Write-Host "----- 텍스처 단계 진단(오류·경고) -----"
+    Get-Content $lf0 | Select-String -Pattern "TextureMesh|image|Image|error|Error|warn|Warn|fail|Fail|cannot|Cannot|invalid" |
+        Select-Object -Last 15 | ForEach-Object { $_.Line }
+}
 $glb = Join-Path $Out "site_model.glb"
 if (Test-Path $glb) {
     Write-Host "결과: $glb"
