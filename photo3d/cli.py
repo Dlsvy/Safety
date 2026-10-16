@@ -54,7 +54,12 @@ def run(a) -> dict:
                         "skipped_blurry": prep["skipped_blurry"]}
 
         log("2/5 SfM (카메라 자세·렌즈 보정)")
+        if prep.get("pano_views"):
+            log(f"  360° 사진/영상에서 원근 사진 {prep['pano_views']}장 생성")
         rec, st = sfm.run_sfm(img_dir, work / "sfm", sequential=prep["sequential"],
+                              single_camera=prep.get("single_camera", True),
+                              camera_model=prep.get("camera_model") or "OPENCV",
+                              camera_params=prep.get("camera_params"),
                               mapper=a.mapper, use_gpu=a.gpu,
                               colmap_bin=a.colmap_bin, features=a.features,
                               mask_dir=Path(a.masks) if a.masks else None, refine_pp=a.refine_pp,

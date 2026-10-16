@@ -211,6 +211,25 @@ sc.camera = cam
 import random
 random.seed(7)
 poses = []
+if os.environ.get("PANO"):
+    # 360 카메라 시험: 셀카봉 높이 1.7 m 로 현장을 한 바퀴 걸으며 N곳에서 등장방형(2:1) 촬영
+    cam_data.type = "PANO"
+    try:
+        cam_data.panorama_type = "EQUIRECTANGULAR"
+    except Exception:
+        cam_data.cycles.panorama_type = "EQUIRECTANGULAR"
+    center = Vector((1.0, 8.0, 0.0))
+    for k in range(N):
+        t = k / N * 2 * math.pi
+        p = center + Vector((19 * math.cos(t), 17 * math.sin(t), 1.7))
+        cam.location = p
+        cam.rotation_euler = (math.radians(90), 0, t + random.uniform(-0.3, 0.3))
+        fn = f"PANO_{k:04d}.png"
+        sc.render.filepath = os.path.join(OUT, "render", fn)
+        if not os.path.exists(sc.render.filepath):
+            bpy.ops.render.render(write_still=True)
+        print(f"rendered pano {k + 1}/{N}", flush=True)
+    sys.exit(0)
 center = Vector((1.0, 8.0, 0.0))
 for k in range(N):
     t = k / N * 2 * math.pi

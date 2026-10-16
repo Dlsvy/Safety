@@ -27,7 +27,7 @@ FEATURES = {
 def _run_cli(colmap: str, image_dir: Path, work: Path, sequential: bool, single_camera: bool,
              camera_model: str, mapper: str, use_gpu: bool, log, features: str = "sift",
              mask_dir: Path | None = None, max_side: int = 3200,
-             max_features: int = 12000) -> list[pycolmap.Reconstruction]:
+             max_features: int = 12000, camera_params: str | None = None) -> list[pycolmap.Reconstruction]:
     """COLMAP 4.x 실행파일(윈도우 CUDA 릴리스 등)로 SfM. GPU 로 수 배 빠르고 ALIKED/LightGlue 사용 가능."""
     import subprocess
     db = work / "database.db"
@@ -53,6 +53,8 @@ def _run_cli(colmap: str, image_dir: Path, work: Path, sequential: bool, single_
               "--ImageReader.single_camera", "1" if single_camera else "0"]
     if mask_dir:
         reader += ["--ImageReader.mask_path", str(mask_dir)]
+    if camera_params:
+        reader += ["--ImageReader.camera_params", camera_params]
     run("feature_extractor", "--database_path", str(db), "--image_path", str(image_dir), *reader, *ext)
     if sequential:
         run("sequential_matcher", "--database_path", str(db), *mat,
@@ -77,7 +79,8 @@ def run_sfm(image_dir: Path, work: Path, sequential: bool, single_camera: bool =
             camera_model: str = "OPENCV", mapper: str = "incremental", use_gpu: bool = False,
             colmap_bin: str | None = None, features: str = "sift", mask_dir: Path | None = None,
             refine_pp: bool = False, robust: bool = True, max_side: int = 3200,
-            max_features: int = 12000, log=print) -> tuple[pycolmap.Reconstruction, dict]:
+            max_features: int = 12000, camera_params: str | None = None,
+            log=print) -> tuple[pycolmap.Reconstruction, dict]:
     work.mkdir(parents=True, exist_ok=True)
     db = work / "database.db"
     if db.exists():
@@ -89,7 +92,7 @@ def run_sfm(image_dir: Path, work: Path, sequential: bool, single_camera: bool =
             shutil.rmtree(sparse)
         recs = _run_cli(colmap_bin, image_dir, work, sequential, single_camera, camera_model,
                         mapper, use_gpu, log, features=features, mask_dir=mask_dir,
-                        max_side=max_side, max_features=max_features)
+                        max_side=max_side, max_features=max_features, camera_params=camera_params)
         if not recs:
             raise RuntimeError("SfM 실패: 이미지 간 겹침이 부족합니다(사진 간 60~80% 겹치게 촬영)")
         return _finish(dict(enumerate(recs)), n_imgs, log, refine_pp, robust)
@@ -110,6 +113,8 @@ def run_sfm(image_dir: Path, work: Path, sequential: bool, single_camera: bool =
         mopt.guided_matching = True
     reader = pycolmap.ImageReaderOptions()
     reader.camera_model = camera_model
+    if camera_params:
+        reader.camera_params = camera_params
     if mask_dir:
         # 움직이는 사람·차량·크레인 마스크. 파일명 = <이미지명>.png, 검정(0) 픽셀은 특징점에서 제외
         reader.mask_path = str(mask_dir)
