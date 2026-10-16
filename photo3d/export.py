@@ -121,8 +121,13 @@ def clean_mesh(mesh: trimesh.Trimesh, cam_centers: np.ndarray | None,
         r = np.linalg.norm((cam_centers - c)[:, :2], axis=1).max() * crop_margin + 2.0
         fc = mesh.triangles_center
         keep &= np.linalg.norm((fc - c)[:, :2], axis=1) <= r
-        zmin = cam_centers[:, 2].min() - 50
+        # 아래쪽 잡음 자르기: 카메라보다 50 m 아래 — 드론은 카메라가 지면 위 수십~수백 m 라
+        # 지면까지 잘리지 않게 메쉬 자체의 아래 1% 높이보다 더 아래만 자른다
+        zmin = min(cam_centers[:, 2].min() - 50, float(np.percentile(fc[:, 2], 1)) - 5) if len(fc) else 0
         keep &= fc[:, 2] >= zmin
+    if keep.sum() < 0.05 * n0:  # 자르기가 거의 다 지우면(특이한 촬영 배치) 자르지 않는다
+        log(f"  촬영 범위 자르기 생략(남는 면 {int(keep.sum()):,}/{n0:,})")
+        keep[:] = True
     mesh.update_faces(keep)
     mesh.remove_unreferenced_vertices()
     # 텍스처 메쉬는 UV 경계에서 정점이 복제돼 있어, 그대로 연결성을 보면 텍스처 조각마다 분리된다.

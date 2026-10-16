@@ -132,6 +132,10 @@ def fill_holes(dense_ply: Path, out: Path, cam_centers: np.ndarray | None, depth
     xyz, nrm, rgb = read_points(dense_ply)
     if nrm is None:
         raise RuntimeError("점군에 법선이 없어 메우기를 할 수 없습니다")
+    if len(xyz) > 4_000_000:  # Poisson depth 10 은 이보다 촘촘해도 결과가 같다 → 메모리 절약(드론 1천만 점: 11.7GB)
+        st = int(np.ceil(len(xyz) / 4_000_000))
+        xyz, nrm = xyz[::st], nrm[::st]
+        rgb = rgb[::st] if rgb is not None else None
     diag = float(np.linalg.norm(np.percentile(xyz, 98, 0) - np.percentile(xyz, 2, 0)))
     tree = cKDTree(xyz)
     spacing = float(np.median(tree.query(xyz[:: max(1, len(xyz) // 20000)], k=2)[0][:, 1]))

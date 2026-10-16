@@ -55,14 +55,30 @@ def find_planes(xyz: np.ndarray, thr: float, max_planes: int = 8, min_frac: floa
 
 
 def up_vector(rec) -> np.ndarray:
-    """중력 위쪽 추정: 사진의 '위' 방향(카메라 -y) 평균. 사람은 대개 폰을 세워(수평으로) 찍는다."""
-    ups = []
+    """중력 위쪽 추정. 사람은 대개 폰을 세워(수평으로) 찍으므로 사진의 '위'(카메라 -y) 평균.
+    드론처럼 대부분 아래를 보고 찍었으면(보는 방향이 한쪽으로 모임) 보는 방향의 반대가 위."""
+    ups, fwd = [], []
     for i in rec.reg_image_ids():
         im = rec.image(i)
         T = im.cam_from_world() if callable(im.cam_from_world) else im.cam_from_world
-        ups.append(-T.rotation.matrix()[1])
-    u = np.mean(ups, 0)
+        R = T.rotation.matrix()
+        ups.append(-R[1])
+        fwd.append(R[2])
+    f = np.mean(fwd, 0)
+    if np.linalg.norm(f) > 0.75:  # 보는 방향이 거의 같음(수직 항공사진) → 그 반대가 위
+        u = -f
+    else:
+        u = np.mean(ups, 0)
     return u / np.linalg.norm(u)
+
+
+def is_nadir(rec, up: np.ndarray) -> bool:
+    """대부분 아래를 보고 찍은 항공(드론) 촬영인가"""
+    fwd = []
+    for i in rec.reg_image_ids():
+        T = rec.image(i).cam_from_world()
+        fwd.append(T.rotation.matrix()[2])
+    return float(np.mean(fwd, 0) @ -up) > 0.75
 
 
 def pick_ground(planes: list[dict], up: np.ndarray, cams: np.ndarray, cos_min: float = 0.9) -> dict | None:
@@ -367,11 +383,14 @@ def improve_ground_splat(splat: Path, dense_dir: Path, out_dir: Path, max_new: i
     rec = pycolmap.Reconstruction(dense_dir / "sparse")
     cams = np.array([rec.image(i).projection_center() for i in rec.reg_image_ids()])
     up = up_vector(rec)
+    if is_nadir(rec, up):
+        log("  항공(드론) 촬영 → 스플랫 바닥 그대로(지형을 평면으로 바꾸지 않음)")
+        return None
     g = find_ground(xyz, up, cams, thr)
     if g is None:
         log("  바닥 평면을 찾지 못함 → 스플랫 바닥 그대로")
         return None
-    if g["support_cells"] < 30:
+    if g["support_cells"] < 30 or g.get("support_frac", 1) < 0.3:
         log("  바닥이 평평하지 않음(경사·지형) → 스플랫 바닥 그대로")
         return None
     o = ground_ortho(g, xyz, dense_dir / "sparse", dense_dir / "images", thr, max_px=3072, log=log)
@@ -409,7 +428,7 @@ def planarize_mesh(mesh_path: Path, points_path: Path, sparse: Path, dst: Path, 
             rec = pycolmap.Reconstruction(sparse)
             cams = np.array([rec.image(i).projection_center() for i in rec.reg_image_ids()])
             g = find_ground(pts, up_vector(rec), cams, thr)
-            if g is not None and not any(abs(float(p["n"] @ g["n"])) > 0.99 and abs(abs(p["d"]) - abs(g["d"])) < thr
+            if g is not None and g.get("support_frac", 1) >= 0.3 and not any(abs(float(p["n"] @ g["n"])) > 0.99 and abs(abs(p["d"]) - abs(g["d"])) < thr
                                          for p in pl):
                 pl.append(g)
         except Exception:
@@ -444,9 +463,13 @@ def floor_patch(points_path: Path, sparse: Path, img_dir: Path, mesh, out_dir: P
     thr = 2 * spacing
     rec = pycolmap.Reconstruction(sparse)
     cams = np.array([rec.image(i).projection_center() for i in rec.reg_image_ids()])
-    g = find_ground(xyz, up_vector(rec), cams, thr)
-    if g is None or g["support_cells"] < 30:
-        log("  바닥 조각: 평평한 바닥을 찾지 못함 → 생략")
+    up = up_vector(rec)
+    if is_nadir(rec, up):
+        log("  바닥 조각: 위에서 내려다본 항공(드론) 촬영 → 바닥이 이미 보여 생략")
+        return None, {}
+    g = find_ground(xyz, up, cams, thr)
+    if g is None or g["support_cells"] < 30 or g.get("support_frac", 1) < 0.3:
+        log("  바닥 조각: 평평한 바닥이 아님(경사·지형) 또는 못 찾음 → 생략")
         return None, {}
     o = ground_ortho(g, xyz, sparse, img_dir, thr, max_px=4096, log=log)
     if o is None:
@@ -459,16 +482,40 @@ def floor_patch(points_path: Path, sparse: Path, img_dir: Path, mesh, out_dir: P
     step = max(1, int(np.ceil(np.sqrt(2 * o["mask"].sum() / max_faces))))
     Hs, Ws = H // step, W // step
     cell_ok = cv2.resize(o["mask"][:Hs * step, :Ws * step].astype(np.uint8), (Ws, Hs), interpolation=cv2.INTER_AREA) > 0
-    # 기존 메쉬가 바닥 근처(±3 thr)에 있는 칸은 제외 → 측정된 바닥은 그대로
-    V = np.asarray(mesh.vertices, np.float64)
-    near = np.abs(V @ n + d) < 3 * thr
-    pv = V[near] - o["origin"]
-    cx = (pv @ o["u"] / (res * step)).astype(int)
-    cy = (pv @ o["v"] / (res * step)).astype(int)
-    k = (cx >= 0) & (cy >= 0) & (cx < Ws) & (cy < Hs)
-    covered = np.zeros((Hs, Ws), np.uint8)
-    covered[cy[k], cx[k]] = 1
-    covered = covered > 0  # 넓히지 않음(넓히면 측정 바닥과 사진 바닥 사이에 틈)
+    # 기존 메쉬가 덮은 칸(카메라 높이 아래 어떤 높이든 표면이 있음 = 측정됨)은 건드리지 않는다.
+    # 실내 천장(카메라보다 위)은 빼고 본다. 빈 칸은 가장 가까운 측정 칸의 가장 낮은 표면이 바닥 평면 위일 때만 메운다
+    # (경사·지형이면 평면과 높이가 달라 메우지 않음 — 드론 경사지에서 평평한 판이 생기던 문제)
+    from scipy import ndimage
+    C = np.asarray(mesh.triangles_center, np.float64)
+    hv = C @ n + d
+    horiz = np.abs(np.asarray(mesh.face_normals) @ n) > 0.7  # 바닥·지형·물체 윗면(벽은 제외)
+    low = hv < 0.8 * max(g.get("cam_h", 0), 0)
+
+    def grid_min(sel):
+        pv = C[sel] - o["origin"]
+        cx = np.floor(pv @ o["u"] / (res * step)).astype(int)
+        cy = np.floor(pv @ o["v"] / (res * step)).astype(int)
+        k = (cx >= 0) & (cy >= 0) & (cx < Ws) & (cy < Hs)
+        out = np.full(Hs * Ws, np.inf)
+        np.minimum.at(out, cy[k] * Ws + cx[k], hv[sel][k])
+        return out.reshape(Hs, Ws)
+    covered = np.isfinite(grid_min(low))
+    hor = grid_min(low & horiz)
+    has_h = np.isfinite(hor)
+    if has_h.any():
+        # 주변(긴 변의 8%) 측정된 수평면 가운데 바닥 평면 위에 있는 것이 절반 이상이면 메움(경사지·지형은 제외).
+        # 가장 가까운 한 칸만 보면 벽에 붙은 작은 잡음 조각이 쐐기 모양 빈틈을 만든다
+        on = (has_h & (np.abs(np.where(has_h, hor, 0)) < 6 * thr)).astype(np.float32)
+        r = max(5, int(0.08 * max(Hs, Ws))) | 1
+        c_on = cv2.blur(on, (r, r))
+        c_all = cv2.blur(has_h.astype(np.float32), (r, r))
+        vote = np.where(c_all > 1e-6, c_on / np.maximum(c_all, 1e-6), np.nan)
+        _, (iy, ix) = ndimage.distance_transform_edt(~has_h, return_indices=True)
+        near = np.abs(hor[iy, ix]) < 6 * thr
+        flat_ok = np.where(np.isnan(vote), near, vote >= 0.4)
+    else:
+        flat_ok = np.ones_like(covered)
+    cell_ok &= flat_ok
     use = cell_ok & ~covered
     if use.sum() < 10:
         return None, {"cells": 0}
