@@ -362,6 +362,91 @@ def explain_error(lines: list[str]) -> str:
     return "\n".join(out)
 
 
+# ── CPU·GPU 사용량 ─────────────────────────────────────
+_SYS = {"cpu_prev": None, "gpu": None, "gpu_t": 0.0, "nvsmi": None}
+
+
+def _cpu_percent() -> float | None:
+    try:
+        import psutil
+        return float(psutil.cpu_percent(interval=None))
+    except ImportError:
+        pass
+    try:
+        if os.name == "nt":  # 추가 설치 없이 윈도우 API 로
+            import ctypes
+            from ctypes import wintypes
+            idle, kern, user = wintypes.FILETIME(), wintypes.FILETIME(), wintypes.FILETIME()
+            ctypes.windll.kernel32.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kern), ctypes.byref(user))
+            v = lambda f: (f.dwHighDateTime << 32) | f.dwLowDateTime  # noqa: E731
+            cur = (v(idle), v(kern) + v(user))  # 커널 시간에 유휴 포함
+        else:
+            a = list(map(int, open("/proc/stat").readline().split()[1:]))
+            cur = (a[3] + a[4], sum(a))
+        prev, _SYS["cpu_prev"] = _SYS["cpu_prev"], cur
+        if not prev or cur[1] == prev[1]:
+            return None
+        return round(100.0 * (1 - (cur[0] - prev[0]) / (cur[1] - prev[1])), 1)
+    except Exception:
+        return None
+
+
+def _ram() -> tuple[float, float] | None:
+    try:
+        import psutil
+        m = psutil.virtual_memory()
+        return m.used / 2**30, m.total / 2**30
+    except ImportError:
+        pass
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            class MS(ctypes.Structure):
+                _fields_ = [("len", ctypes.c_ulong), ("load", ctypes.c_ulong), ("total", ctypes.c_ulonglong),
+                            ("avail", ctypes.c_ulonglong), ("tp", ctypes.c_ulonglong), ("ap", ctypes.c_ulonglong),
+                            ("tv", ctypes.c_ulonglong), ("av", ctypes.c_ulonglong), ("ax", ctypes.c_ulonglong)]
+            m = MS(); m.len = ctypes.sizeof(MS)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m))
+            return (m.total - m.avail) / 2**30, m.total / 2**30
+        d = {ln.split(":")[0]: int(ln.split()[1]) for ln in open("/proc/meminfo")}
+        return (d["MemTotal"] - d["MemAvailable"]) / 2**20, d["MemTotal"] / 2**20
+    except Exception:
+        return None
+
+
+def _gpu() -> dict | None:
+    """nvidia-smi 로 GPU 사용률·메모리·온도 (1.5초 캐시)"""
+    now = time.time()
+    if now - _SYS["gpu_t"] < 1.5:
+        return _SYS["gpu"]
+    _SYS["gpu_t"] = now
+    if _SYS["nvsmi"] is None:
+        cand = [shutil.which("nvidia-smi"), r"C:\Windows\System32\nvidia-smi.exe",
+                r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe"]
+        _SYS["nvsmi"] = next((c for c in cand if c and Path(c).exists()), "")
+    if not _SYS["nvsmi"]:
+        _SYS["gpu"] = None
+        return None
+    try:
+        r = subprocess.run([_SYS["nvsmi"], "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu",
+                            "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=3,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        n, u, mu, mt, t = [x.strip() for x in r.stdout.strip().splitlines()[0].split(",")]
+        _SYS["gpu"] = {"name": n, "util": float(u), "mem_used": float(mu) / 1024, "mem_total": float(mt) / 1024,
+                       "temp": float(t)}
+    except Exception:
+        _SYS["gpu"] = None
+    return _SYS["gpu"]
+
+
+def system_usage() -> dict:
+    ram = _ram()
+    return {"cpu": _cpu_percent(), "cores": os.cpu_count(),
+            "ram_used": round(ram[0], 1) if ram else None, "ram_total": round(ram[1], 1) if ram else None,
+            "gpu": _gpu()}
+
+
 # ── HTTP ──────────────────────────────────────────────
 class Handler(BaseHTTPRequestHandler):
     server_version = "photo3d"
@@ -412,6 +497,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if p in ("/", "/index.html"):
                 return self._file(WEB / "index.html")
+            if p == "/api/sys":
+                return self._json(system_usage())
             if p == "/api/samples":
                 return self._json({"samples": list_samples(), "download": _sample_dl})
             if p == "/api/jobs":

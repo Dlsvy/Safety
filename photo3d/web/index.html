@@ -24,6 +24,12 @@ body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans)}
 .wrap{max-width:980px;margin:0 auto;padding-block:20px 60px;
   padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
 header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+.sys{margin-left:auto;display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);align-self:center}
+.sys .m{display:flex;align-items:center;gap:6px;white-space:nowrap}
+.sys .m b{color:var(--fg,inherit);font-weight:600;font-variant-numeric:tabular-nums}
+.sys .g{width:56px;height:6px;border-radius:3px;background:var(--line);overflow:hidden}
+.sys .g i{display:block;height:100%;background:#3fb950;transition:width .6s}
+.sys .g i.mid{background:#d29922}.sys .g i.hi{background:#f85149}
 h1{margin:0;font-size:24px;letter-spacing:-.01em}
 h1 b{background:var(--accent);color:var(--accent-ink);padding:0 6px;border-radius:3px}
 .sub{color:var(--muted);font-size:13px}
@@ -86,8 +92,11 @@ details input{margin-top:6px;width:100%}
 @media (prefers-reduced-motion:reduce){.cur .ico{animation-duration:3s}}
 .plog{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pel{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:4px}
-.pv{position:relative;height:180px;border-radius:8px;background:#0f1113;overflow:hidden}
-.pv canvas{width:100%;height:100%;display:block}
+.pv{position:relative;height:240px;border-radius:8px;background:#0f1113;overflow:hidden}
+.pv canvas{width:100%;height:100%;display:block;touch-action:none;cursor:grab}
+.pv canvas:active{cursor:grabbing}
+.pv .pvhelp{position:absolute;right:8px;top:6px;font-size:11px;color:#c9d1d9;pointer-events:none;text-shadow:0 1px 3px #000,0 0 6px #000}
+.pv .cap{text-shadow:0 1px 3px #000,0 0 6px #000}
 .pv .cap{position:absolute;left:8px;bottom:6px;font-size:11.5px;color:#cfd3d8}
 @media (max-width:560px){.prog{grid-template-columns:1fr}}
 @media (max-width:560px){.job{grid-template-columns:64px 1fr}.job img,.job .ph{width:64px;height:48px}.acts{grid-column:1/-1;justify-content:flex-start}}
@@ -135,6 +144,7 @@ details input{margin-top:6px;width:100%}
   <header>
     <h1>현장 <b>3D</b></h1>
     <span class="sub">사진·영상으로 실측 3D 만들기 · 유니티 크레인 시뮬레이션용</span>
+    <div class="sys" id="sys" aria-label="컴퓨터 사용량"></div>
   </header>
 
   <section class="panel" aria-labelledby="newh">
@@ -376,7 +386,8 @@ function progress(j) {
   if (!L) {
     const el = document.createElement("div"); el.className = "prog";
     el.innerHTML = `<div><ol class="steps"></ol><div class="pel"></div><div class="plog"></div></div>
-      <div class="pv"><canvas></canvas><div class="cap">카메라 위치를 계산하면 3D 점이 여기에 나타납니다</div></div>`;
+      <div class="pv"><canvas></canvas><div class="cap">카메라 위치를 계산하면 3D 점이 여기에 나타납니다</div>
+      <div class="pvhelp">드래그 회전 · 휠 확대 · 오른쪽 드래그 이동 · 더블클릭 처음 시점</div></div>`;
     L = {el, pv: null, rev: null, started: j.started}; live.set(j.id, L);
   }
   L.started = j.started;
@@ -401,16 +412,23 @@ async function loadPreview(id, L) {
   try {
     const d = await api(`/api/jobs/${id}/preview`); if (!d.n) return;
     if (!THREE) { THREE = await import("three"); }
+    if (!OrbitControls) ({ OrbitControls } = await import("three/addons/controls/OrbitControls.js"));
     if (!L.pv) {
       const cv = L.el.querySelector("canvas");
       const r = new THREE.WebGLRenderer({canvas: cv, antialias: true}); r.setPixelRatio(Math.min(devicePixelRatio, 2));
       const sc = new THREE.Scene(), cam = new THREE.PerspectiveCamera(45, 1, 0.01, 1e5), root = new THREE.Group();
-      sc.add(root); L.pv = {r, sc, cam, root, a: 0};
+      // 마우스/손가락: 왼쪽 드래그 회전 · 휠/두 손가락 확대·축소 · 오른쪽 드래그 이동 · 더블클릭 처음 시점
+      const ctl = new OrbitControls(cam, cv);
+      ctl.enableDamping = true; ctl.autoRotate = true; ctl.autoRotateSpeed = 1.2;
+      ctl.addEventListener("start", () => { ctl.autoRotate = false; L.pv.user = true; });
+      ["pointerdown", "click", "wheel"].forEach((ev) => cv.addEventListener(ev, (e) => e.stopPropagation()));
+      cv.addEventListener("dblclick", (e) => { e.stopPropagation(); L.pv.user = false; ctl.autoRotate = true; L.pv.home(); });
+      sc.add(root); L.pv = {r, sc, cam, root, ctl, user: false, home: () => {}};
       const tick = () => {
-        if (!live.has(id)) { r.dispose(); return; }
+        if (!live.has(id)) { ctl.dispose(); r.dispose(); return; }
         const w = cv.clientWidth, h = cv.clientHeight;
         if (w && (cv.width !== Math.floor(w * r.getPixelRatio()))) { r.setSize(w, h, false); cam.aspect = w / h; cam.updateProjectionMatrix(); }
-        L.pv.a += 0.004; root.rotation.y = L.pv.a; r.render(sc, cam); requestAnimationFrame(tick);
+        ctl.update(); r.render(sc, cam); requestAnimationFrame(tick);
       };
       tick();
     }
@@ -436,7 +454,10 @@ async function loadPreview(id, L) {
       const cg = new THREE.BufferGeometry(); cg.setAttribute("position", new THREE.BufferAttribute(cp, 3));
       root.add(new THREE.Points(cg, new THREE.PointsMaterial({size: rad / 40, color: 0xf2b705})));
     }
-    if (L.pv.kind !== d.kind || !L.pv.rad || rad > L.pv.rad * 1.15) { L.pv.rad = rad; cam.position.set(0, rad * 0.9, rad * 2.2); cam.lookAt(0, 0, 0); }
+    L.pv.home = () => { const R = L.pv.rad; L.pv.ctl.target.set(0, 0, 0); cam.position.set(0, R * 0.9, R * 2.2); cam.lookAt(0, 0, 0); };
+    // 사용자가 직접 돌리거나 확대한 뒤에는 점이 늘어나도 시점을 건드리지 않는다
+    if (!L.pv.user && (L.pv.kind !== d.kind || !L.pv.rad || rad > L.pv.rad * 1.15)) { L.pv.rad = rad; L.pv.home(); }
+    else if (!L.pv.rad) L.pv.rad = rad;
     L.pv.kind = d.kind; L.pv.c = c;
     L.el.querySelector(".cap").textContent = d.kind === "dense"
       ? `조밀 점 ${n.toLocaleString()}개 · 다음: 메쉬·색`
@@ -459,6 +480,25 @@ async function refresh() {
   } catch (e) { $("list").innerHTML = `<div class="empty">앱 서버에 연결할 수 없습니다 — APP.bat 창이 켜져 있는지 확인하세요.</div>`; }
 }
 refresh(); setInterval(refresh, 3000);
+
+/* ── CPU·GPU 사용량(2초마다) ── */
+function meter(label, pct, text, title) {
+  const p = Math.max(0, Math.min(100, pct || 0)), c = p >= 90 ? "hi" : p >= 60 ? "mid" : "";
+  return `<span class="m" title="${title || ""}">${label}<span class="g"><i class="${c}" style="width:${p}%"></i></span><b>${text}</b></span>`;
+}
+async function sysTick() {
+  try {
+    const d = await api("/api/sys"), g = d.gpu, out = [];
+    if (d.cpu != null) out.push(meter("CPU", d.cpu, `${Math.round(d.cpu)}%`, `${d.cores}코어`));
+    if (d.ram_total) out.push(meter("메모리", 100 * d.ram_used / d.ram_total, `${d.ram_used}/${d.ram_total}GB`));
+    if (g) {
+      out.push(meter("GPU", g.util, `${Math.round(g.util)}%`, `${g.name} · ${g.temp}°C`));
+      out.push(meter("GPU메모리", 100 * g.mem_used / g.mem_total, `${g.mem_used.toFixed(1)}/${g.mem_total.toFixed(0)}GB`, `${g.temp}°C`));
+    } else out.push(`<span class="m">GPU 정보 없음</span>`);
+    $("sys").innerHTML = out.join("");
+  } catch (e) {}
+}
+sysTick(); setInterval(sysTick, 2000);
 
 /* ── 3D 뷰어 ── */
 const cv = $("cv");
