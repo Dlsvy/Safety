@@ -312,5 +312,6 @@ def bake(mesh, sparse: Path, img_dir: Path, atlas: int = 8192, max_faces: int = 
     mat = trimesh.visual.material.PBRMaterial(baseColorTexture=pil, metallicFactor=0.0, roughnessFactor=1.0)
     out_mesh = trimesh.Trimesh(newV, newF, process=False,
                                visual=trimesh.visual.TextureVisuals(uv=newUV, material=mat))
+    out_mesh.metadata["bake"] = {"seen": float(seen_f.mean()), "patches": len(patches), "scale": float(s_scale)}
     log(f"  텍스처 굽기 완료: {W}×{H}px")
     return out_mesh, label

@@ -22,6 +22,9 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 
+LAST: dict = {}  # 마지막 정리 결과(품질 보고서용)
+
+
 def _read_vis(path: Path, n: int) -> np.ndarray | None:
     """COLMAP fused.ply.vis → 점마다 보인 이미지 수"""
     try:
@@ -73,6 +76,7 @@ def clean_points(xyz: np.ndarray, cams: np.ndarray | None = None, vis: np.ndarra
         along = np.abs((ray * dirv).sum(1)) > 0.9
         spike |= (lin > lin_thr - 0.2) & along
     keep &= ~spike
+    LAST.update(raw=int(n), kept=int(keep.sum()))
     log(f"  점군 정리: {n:,} → {keep.sum():,}점 (적은 지지 {0 if vis is None else int((vis < 3).sum()):,}, "
         f"이상점 {int(sor.sum()):,}, 가시·시선 줄무늬 {int(spike.sum()):,})")
     return keep

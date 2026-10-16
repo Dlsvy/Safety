@@ -182,6 +182,7 @@ def job_view(job: dict) -> dict:
     v["has_filled"] = (d / "out" / "site_filled.glb").exists()
     v["has_est"] = (d / "out" / "site_estimated.glb").exists()
     v["has_splat"] = (d / "out" / "site_splat.ply").exists()
+    v["has_report"] = (d / "out" / "quality_report.html").exists()
     v["files"] = len([p for p in (d / "input").iterdir()]) if (d / "input").exists() else 0
     return v
 

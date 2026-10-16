@@ -293,6 +293,10 @@ function card(j) {
     const b = document.createElement("button"); b.textContent = "3D 보기"; b.className = "primary";
     b.onclick = () => openViewer(j); acts.append(b);
   }
+  if (j.has_report) {
+    const a = document.createElement("a"); a.className = "btn"; a.textContent = "품질 보고서";
+    a.href = `/files/${j.id}/quality_report.html`; a.target = "_blank"; a.rel = "noopener"; acts.append(a);
+  }
   if (j.status === "failed") {
     const b = document.createElement("button"); b.textContent = "다시 처리";
     b.onclick = async () => { await api(`/api/jobs/${j.id}/start`, {method:"POST"}).catch((e) => alertMsg(e)); refresh(); };

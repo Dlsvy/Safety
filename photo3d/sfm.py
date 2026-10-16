@@ -10,6 +10,8 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+import os
+
 import numpy as np
 import pycolmap
 
@@ -177,6 +179,52 @@ def reject_bad_images(rec: pycolmap.Reconstruction, min_points: int = 60, log=pr
     return names
 
 
+def gradual_selection(rec: pycolmap.Reconstruction, iters: int = 2, max_err: float = 2.0,
+                      min_angle_deg: float = 1.5, log=print) -> dict:
+    """Metashape 'Gradual Selection' 대응: 나쁜 연결점을 지우고 번들조정을 다시 한다.
+    - 재투영오차 > max_err px
+    - 삼각측량각(점을 본 카메라 시선 사이 최대각) < min_angle_deg  → 깊이가 불확실한 점
+    - 2장에서만 보이고 오차 > 1px 인 점
+    사진마다 최소 60점은 남긴다(등록이 끊기지 않게)."""
+    removed = 0
+    ba = pycolmap.BundleAdjustmentOptions()
+    ba.refine_principal_point = False
+    centers = {i: rec.image(i).projection_center() for i in rec.reg_image_ids()}
+    for _ in range(iters):
+        rec.update_point_3d_errors()
+        bad = []
+        for pid, p in rec.points3D.items():
+            els = p.track.elements
+            if p.error > max_err or (len(els) <= 2 and p.error > 1.0):
+                bad.append(pid)
+                continue
+            C = np.array([centers[e.image_id] for e in els if e.image_id in centers])
+            if len(C) >= 2:
+                r = C - p.xyz
+                r /= np.maximum(np.linalg.norm(r, axis=1, keepdims=True), 1e-12)
+                cmin = float((r @ r.T).min())
+                if np.degrees(np.arccos(np.clip(cmin, -1, 1))) < min_angle_deg:
+                    bad.append(pid)
+        # 사진별 남는 점 수 보호
+        cnt = {i: rec.image(i).num_points3D for i in centers}
+        dropped = 0
+        for pid in bad:
+            els = rec.point3D(pid).track.elements
+            if all(cnt[e.image_id] > 60 for e in els if e.image_id in cnt):
+                for e in els:
+                    if e.image_id in cnt:
+                        cnt[e.image_id] -= 1
+                rec.delete_point3D(pid)
+                dropped += 1
+        removed += dropped
+        if dropped == 0:
+            break
+        pycolmap.bundle_adjustment(rec, ba)
+    err = rec.compute_mean_reprojection_error()
+    log(f"  연결점 정리(Gradual selection): {removed:,}점 제거 → 재투영오차 {err:.3f}px")
+    return {"removed": removed, "reproj_after": err}
+
+
 def _all_names(recs: dict) -> list[str]:
     names = set()
     for r in recs.values():
@@ -193,6 +241,7 @@ def _finish(recs: dict, n_imgs: int, log, refine_pp: bool = False,
     ba = pycolmap.BundleAdjustmentOptions()
     ba.refine_principal_point = False
     pycolmap.bundle_adjustment(rec, ba)
+    gsel = gradual_selection(rec, log=log) if robust and os.environ.get("PHOTO3D_NO_GSEL") != "1" else None
     if refine_pp:
         # 마지막에 광학중심(cx,cy)까지 풀어서 한 번 더 — 중심이 어긋난 렌즈에서 접선왜곡항이 대신 흡수하는 것을 막는다
         ba.refine_principal_point = True
@@ -208,6 +257,7 @@ def _finish(recs: dict, n_imgs: int, log, refine_pp: bool = False,
         "points3D": rec.num_points3D(),
         "mean_reprojection_error_px": rec.compute_mean_reprojection_error(),
         "mean_track_length": rec.compute_mean_track_length(),
+        "gradual_selection": gsel,
         "cameras": {cid: {"model": c.model_name, "params": [round(v, 6) for v in c.params]}
                     for cid, c in rec.cameras.items()},
     }

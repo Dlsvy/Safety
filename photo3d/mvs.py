@@ -199,6 +199,7 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
     if engine == "colmap":
         # Windows OpenMVS TextureMesh 는 검은 텍스처(PC 3회) → 직접 구현한 사진 텍스처 굽기 사용
         colored = _color_from_points(mesh, dense / "fused.ply", mvs, log)
+        tex_info = None
         try:
             import trimesh
             from .texture import bake
@@ -207,12 +208,15 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
             tm, _ = bake(trimesh.load(colored, process=False), dense / "sparse", dense / "images",
                          atlas=atlas, max_faces=maxf, log=log)
             obj = mvs / "scene_baked.glb"
+            tex_info = tm.metadata.get("bake")
             tm.export(obj)
         except Exception as e:
             log(f"  사진 텍스처 굽기 실패 → 점군 색 메쉬 사용: {e}")
             obj = colored
         ply = mvs / "scene_dense.ply"
-        return {"textured_obj": obj, "dense_ply": ply if ply.exists() else None, "log": logf}
+        from .pointfilter import LAST
+        return {"textured_obj": obj, "dense_ply": ply if ply.exists() else None, "log": logf,
+                "stats": {**LAST, "texture": tex_info}}
     try:
         _run([_bin("TextureMesh"), str(dense_scene), "--mesh-file", str(mesh), "--export-type", "ply",  # v2.3 SaveOBJ 세그폴트 → PLY(+png)
               "--empty-color", "8421504",  # 어느 사진에도 안 보인 면은 회색(기본 주황)

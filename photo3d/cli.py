@@ -77,6 +77,7 @@ def run(a) -> dict:
     res = mvs.densify_and_mesh(rec, img_dir, work, quality=a.quality, engine=a.dense,
                                colmap_bin=a.colmap_bin, log=log)
 
+    rep["dense"] = res.get("stats")
     log("5/5 정리·유니티 내보내기")
     info = export.export_all(res["textured_obj"], out, cams if not geo["method"].startswith("none") else None,
                              collider_faces=a.collider_faces, meta={"georef": geo, "sfm": st}, log=log)
@@ -131,6 +132,11 @@ def run(a) -> dict:
     rep["grade"] = grade(rep)
     with open(out / "report.json", "w", encoding="utf-8") as f:
         json.dump(rep, f, ensure_ascii=False, indent=2, default=str)
+    try:
+        from . import report
+        report.write(out, rep, work, log=log)
+    except Exception as e:
+        log(f"  품질 보고서 생략: {e}")
     log(f"완료 — 등급 {rep['grade']['grade']}: {rep['grade']['reason']}")
     return rep
 
