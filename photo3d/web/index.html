@@ -176,7 +176,7 @@ details input{margin-top:6px;width:100%}
     <div class="row"><input id="name" type="text" placeholder="현장 이름 (예: 3공구 북측 옹벽)" autocomplete="off"></div>
     <div class="pick">
       <label for="files"><strong>파일 고르기</strong>사진·영상 여러 장</label>
-      <input id="files" type="file" accept="image/*,video/*" multiple>
+      <input id="files" type="file" accept="image/*,video/*,.insv,.insp,.360,.osv" multiple>
       <label for="folder"><strong>폴더 고르기</strong>폴더 안 사진 전부</label>
       <input id="folder" type="file" webkitdirectory directory multiple>
       <label for="cam"><strong>카메라로 찍기</strong>폰에서 바로 촬영</label>
@@ -184,7 +184,7 @@ details input{margin-top:6px;width:100%}
     </div>
     <div class="pickpc" id="pickpc" hidden><button type="button" id="browse">PC 폴더 바로 쓰기 (올리기 없이 빠름)</button></div>
     <div class="samples" id="samples"></div>
-    <div class="chosen" id="chosen">선택한 파일 없음 · 한쪽 면은 5~6장, 한 바퀴는 15~20장, 또는 1~2분 영상(천천히 걷기) · 360 카메라 영상·사진(2:1 파노라마)도 됩니다</div>
+    <div class="chosen" id="chosen">선택한 파일 없음 · 한쪽 면은 5~6장, 한 바퀴는 15~20장, 또는 1~2분 영상(천천히 걷기) · 360 카메라: 펼친 영상·사진(2:1) 또는 Insta360 원본(.insv·.insp)도 됩니다</div>
     <div class="mode" role="radiogroup" aria-label="품질">
       <label><input type="radio" name="mode" value="fast" checked><span><strong>빠르게</strong>약 5~10분 · 프로토타입(해상도 낮춤·구멍 메우기 생략)</span></label>
       <label><input type="radio" name="mode" value="best"><span><strong>최고 품질</strong>GPU 최대 · 15~30분</span></label>
@@ -273,6 +273,7 @@ details input{margin-top:6px;width:100%}
 </script>
 <script type="module">
 // 3D 라이브러리는 '3D 보기'를 누를 때 불러온다 — 인터넷이 막혀도 목록·업로드는 동작
+const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 let THREE, GLTFLoader, OrbitControls;
 
 const $ = (id) => document.getElementById(id);
@@ -390,6 +391,7 @@ function card(j) {
       <div class="meta"><span class="pill s-${j.status}">${STATUS[j.status] || j.status}</span>
         ${j.stage && j.status === "running" ? `<span>${j.stage}</span>` : ""}
         ${j.registered ? `<span>사진 <span class="num">${j.registered}</span> 연결</span>` : ""}
+        ${j.camera ? `<span title="촬영 기종(사진 EXIF·영상 정보에서 자동 인식)">📷 ${esc(j.camera)}</span>` : ""}
         ${size ? `<span>크기 <span class="num">${size}</span> ${unit}</span>` : ""}
         ${mins ? `<span class="num">${mins}</span>` : ""}
         <span>${fmtT(j.created)}</span></div></div>
@@ -590,7 +592,6 @@ async function sysTick() {
 sysTick(); setInterval(sysTick, 2000);
 
 /* ── GPU 점검 ── */
-const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 async function gpuCheck() {
   try {
     const d = await api("/api/gpu"), ico = {ok: "✓", warn: "!", bad: "✕", info: "i"};

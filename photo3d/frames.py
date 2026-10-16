@@ -12,8 +12,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-IMG_EXT = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".heic", ".webp"}
-VID_EXT = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}
+IMG_EXT = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".heic", ".webp", ".insp"}  # .insp: Insta360 원본 사진
+VID_EXT = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".insv"}  # .insv: Insta360 원본 영상
 
 
 def sharpness(path: Path, max_side: int = 1024) -> float:
@@ -258,10 +258,23 @@ def prepare_inputs(inputs: list[Path], out_dir: Path, max_side: int = 3200,
         elif p.suffix.lower() in VID_EXT:
             videos.append(p)
         else:
-            raise ValueError(f"지원하지 않는 입력: {p}")
+            from .cam360 import UNSUPPORTED_EXT
+            hint = UNSUPPORTED_EXT.get(p.suffix.lower())
+            raise ValueError(f"지원하지 않는 입력: {p.name}" + (f" — {hint}" if hint else ""))
+    from . import cam360
+    # 촬영 기종(사진 EXIF·영상 메타데이터·360 카메라 고유 문자열)
+    models: dict = {}
+    for q in (photos[:40] + videos):
+        mdl = cam360.detect_model(q) or "알 수 없음"
+        models[mdl] = models.get(mdl, 0) + 1
+    if models:
+        log("  촬영 기종: " + ", ".join(f"{k}({v})" for k, v in sorted(models.items(), key=lambda x: -x[1])))
     images: list[Path] = []
     blurry = []
     pano_n = 0
+    fish_n = 0
+    mask_dir = out_dir.parent / "masks_fisheye"
+    kinds: dict = {}
     manifest: dict = {}  # 작업용 사진 이름 → 원본 이름·축소 비율·GPS (기준점 픽셀·GPS 정합에 사용)
     if photos:
         scores = {p: sharpness(p) for p in photos}
@@ -274,6 +287,15 @@ def prepare_inputs(inputs: list[Path], out_dir: Path, max_side: int = 3200,
                 continue
             dst = out_dir / f"p_{k:05d}_{p.stem}"
             hw = cv2.imread(str(p), cv2.IMREAD_REDUCED_GRAYSCALE_8)
+            kind = cam360.classify(hw) if hw is not None else "normal"
+            kinds[kind] = kinds.get(kind, 0) + 1
+            if kind in ("dual_fisheye", "fisheye"):  # 360 원본(어안) → 렌즈별 폴더
+                full = cv2.imread(str(p), cv2.IMREAD_COLOR)
+                got = cam360.write_lens_images(full, kind, out_dir, mask_dir, f"p_{k:05d}_{p.stem}", max_side,
+                                               cam360.lens_index_from_name(p.name))
+                images += got
+                fish_n += len(got)
+                continue
             if hw is not None and is_equirect(hw.shape[1] * 8, hw.shape[0] * 8):
                 views = equirect_views(p, dst)
                 images += views
@@ -288,6 +310,27 @@ def prepare_inputs(inputs: list[Path], out_dir: Path, max_side: int = 3200,
         sub = out_dir
         per = max(30, video_frames // max(1, len(videos)))
         w_h = _video_size(v)
+        maybe_fish = v.suffix.lower() == ".insv" or (w_h and (0.95 < w_h[0] / max(w_h[1], 1) < 1.05))
+        probe = None
+        if w_h and (maybe_fish or is_equirect(*w_h)):  # 어안인지 첫 장면으로 확인
+            cap = cv2.VideoCapture(str(v))
+            ok_, probe = cap.read()
+            cap.release()
+            probe = probe if ok_ else None
+        vkind = cam360.classify(probe) if probe is not None else ("equirect" if w_h and is_equirect(*w_h) else "normal")
+        kinds[vkind] = kinds.get(vkind, 0) + 1
+        if vkind in ("dual_fisheye", "fisheye"):
+            raw = extract_video(v, sub, max(12, per // 2), 99999, pano=True, log=log)
+            frames = []
+            for f in raw:
+                img = cv2.imread(str(f))
+                frames += cam360.write_lens_images(img, vkind, out_dir, mask_dir, f"{v.stem}_{f.stem}", max_side,
+                                                   cam360.lens_index_from_name(v.name))
+                f.unlink()
+            fish_n += len(frames)
+            log(f"  360 원본 영상({cam360.KIND_KO[vkind]}) → 장면 {len(raw)}개, 렌즈별 사진 {len(frames)}장")
+            images += frames
+            continue
         if w_h and is_equirect(*w_h):
             # 360° 영상: 위치 수를 줄이고(한 위치당 10방향) 각 프레임을 원근 사진으로 자른다
             raw = extract_video(v, sub, max(12, per // 3), 99999, pano=True, log=log)
@@ -316,7 +359,21 @@ def prepare_inputs(inputs: list[Path], out_dir: Path, max_side: int = 3200,
     if n_gps:
         log(f"  GPS 가 있는 사진 {n_gps}장")
     only_pano = pano_n == len(images) and pano_n > 0
-    return {"images": images, "sequential": bool(videos) and not photos and not pano_n,
+    if kinds:
+        log("  입력 종류: " + ", ".join(f"{cam360.KIND_KO[k]} {n}" for k, n in kinds.items()))
+    if fish_n:
+        if fish_n != len(images):
+            log("  주의: 360 원본(어안)과 일반 사진이 섞여 있음 — 360 원본만 따로 처리하는 것을 권장")
+        # 렌즈마다 카메라 하나(OPENCV_FISHEYE, 왜곡은 SfM 이 맞춤), 원 바깥은 마스크로 제외
+        # 초기 렌즈값: 360 카메라 어안은 대략 200° 등거리 투영(초점거리 = 반지름 / 100°) — 기본 추정(이미지 폭×1.2)은
+        # 어안에서 크게 틀려 카메라 위치 계산이 시작되지 않는다. 왜곡·초점은 SfM 이 다시 맞춘다
+        s0 = cv2.imread(str(images[0]), cv2.IMREAD_REDUCED_GRAYSCALE_2).shape[0] * 2
+        f0 = (s0 / 2) / np.radians(100)
+        prm = f"{f0:.2f},{f0:.2f},{s0 / 2:.1f},{s0 / 2:.1f},0,0,0,0"
+        return {"images": images, "sequential": False, "skipped_blurry": blurry, "pano_views": 0,
+                "camera_model": "OPENCV_FISHEYE", "camera_params": prm, "single_camera": False,
+                "per_folder": True, "mask_dir": str(mask_dir), "rig": None, "models": models, "fisheye": fish_n}
+    return {"models": models, "images": images, "sequential": bool(videos) and not photos and not pano_n,
             "skipped_blurry": blurry, "pano_views": pano_n,
             # 360 에서 자른 사진만 있으면 렌즈를 정확히 안다(FOV 90°, 왜곡 없음)
             "camera_model": "PINHOLE" if only_pano else None,

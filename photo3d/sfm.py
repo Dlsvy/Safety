@@ -72,7 +72,7 @@ def _run_cli(colmap: str, image_dir: Path, work: Path, sequential: bool, single_
              camera_model: str, mapper: str, use_gpu: bool, log, features: str = "sift",
              mask_dir: Path | None = None, max_side: int = 3200,
              max_features: int = 12000, camera_params: str | None = None,
-             rig: list | None = None) -> list[pycolmap.Reconstruction]:
+             rig: list | None = None, per_folder: bool = False) -> list[pycolmap.Reconstruction]:
     """COLMAP 4.x 실행파일(윈도우 CUDA 릴리스 등)로 SfM. GPU 로 수 배 빠르고 ALIKED/LightGlue 사용 가능."""
     import subprocess
     db = work / "database.db"
@@ -97,7 +97,7 @@ def _run_cli(colmap: str, image_dir: Path, work: Path, sequential: bool, single_
     mat = ["--FeatureMatching.use_gpu", g, "--FeatureMatching.type", ftype[1]]
     reader = ["--ImageReader.camera_model", camera_model,
               "--ImageReader.single_camera", "1" if single_camera else "0"]
-    if rig:
+    if rig or per_folder:  # 리그·360 원본(렌즈별 폴더): 폴더마다 카메라 하나
         reader += ["--ImageReader.single_camera_per_folder", "1"]
     if mask_dir:
         reader += ["--ImageReader.mask_path", str(mask_dir)]
@@ -162,7 +162,7 @@ def run_sfm(image_dir: Path, work: Path, sequential: bool, single_camera: bool =
             colmap_bin: str | None = None, features: str = "sift", mask_dir: Path | None = None,
             refine_pp: bool = False, robust: bool = True, max_side: int = 3200,
             max_features: int = 12000, camera_params: str | None = None, rig: list | None = None,
-            log=print) -> tuple[pycolmap.Reconstruction, dict]:
+            per_folder: bool = False, log=print) -> tuple[pycolmap.Reconstruction, dict]:
     work.mkdir(parents=True, exist_ok=True)
     db = work / "database.db"
     if db.exists():
@@ -175,7 +175,7 @@ def run_sfm(image_dir: Path, work: Path, sequential: bool, single_camera: bool =
         recs = _run_cli(colmap_bin, image_dir, work, sequential, single_camera, camera_model,
                         mapper, use_gpu, log, features=features, mask_dir=mask_dir,
                         max_side=max_side, max_features=max_features, camera_params=camera_params,
-                        rig=rig)
+                        rig=rig, per_folder=per_folder)
         if not recs:
             raise RuntimeError("SfM 실패: 이미지 간 겹침이 부족합니다(사진 간 60~80% 겹치게 촬영)")
         return _finish(dict(enumerate(recs)), n_imgs, log, refine_pp, robust,
@@ -206,7 +206,7 @@ def run_sfm(image_dir: Path, work: Path, sequential: bool, single_camera: bool =
         reader.mask_path = str(mask_dir)
     log(f"  특징점 추출 ({n_imgs}장, {device.name})")
     pycolmap.extract_features(db, image_dir, camera_mode=(
-        pycolmap.CameraMode.PER_FOLDER if rig else
+        pycolmap.CameraMode.PER_FOLDER if (rig or per_folder) else
         pycolmap.CameraMode.SINGLE if single_camera else pycolmap.CameraMode.AUTO),
         reader_options=reader, extraction_options=ext, device=device)
     if rig:

@@ -32,7 +32,7 @@ JOBS.mkdir(parents=True, exist_ok=True)
 STAGES = [("1/5", "입력 정리"), ("2/5", "카메라 위치 계산"), ("3/5", "축척·좌표"),
           ("4/5", "3D 생성"), ("5/5", "유니티 파일")]
 MEDIA = {".jpg", ".jpeg", ".png", ".heic", ".tif", ".tiff", ".webp",
-         ".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}
+         ".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".insv", ".insp"}  # .insv/.insp: Insta360 원본
 
 _lock = threading.Lock()
 _queue: "queue.Queue[str]" = queue.Queue()
@@ -352,6 +352,9 @@ def job_view(job: dict) -> dict:
             v["stage"] = stage
         v["step"] = step
         v["side"] = side_tasks(d, lines)
+        cam = next((ln.split("촬영 기종:", 1)[1].strip() for ln in lines if "촬영 기종:" in ln), None)
+        if cam:
+            v["camera"] = cam
         v["pct"], v["eta_min"] = overall_progress(d, lines, step, job)
         human = [ln for ln in lines if "$ " not in ln and ln.strip()]  # 실행 명령(경로 덩어리)은 숨김
         v["last_log"] = re.sub(r"^\[\s*[\d.]+s\]\s*", "", human[-1]).strip()[-160:] if human else ""
@@ -369,6 +372,9 @@ def job_view(job: dict) -> dict:
             v["grade"] = r.get("grade")
             v["size_m"] = r.get("model", {}).get("size_m")
             v["registered"] = f"{r['sfm']['images_registered']}/{r['sfm']['images_input']}"
+            cm = (r.get("input") or {}).get("camera_models")
+            if cm:
+                v["camera"] = ", ".join(f"{k}({n})" for k, n in sorted(cm.items(), key=lambda x: -x[1]))
         except Exception:
             pass
     v["has_model"] = (d / "out" / "site_model.glb").exists()
@@ -882,7 +888,9 @@ class Handler(BaseHTTPRequestHandler):
         name = Path(parse_qs(u.query).get("name", ["file"])[0]).name
         ext = Path(name).suffix.lower()
         if ext not in MEDIA:
-            return self._json({"error": f"지원하지 않는 형식: {ext}"}, 400)
+            from .cam360 import UNSUPPORTED_EXT
+            hint = UNSUPPORTED_EXT.get(ext)
+            return self._json({"error": f"지원하지 않는 형식: {ext}" + (f" — {hint}" if hint else "")}, 400)
         try:
             d = job_dir(m.group(1)) / "input"
         except KeyError:

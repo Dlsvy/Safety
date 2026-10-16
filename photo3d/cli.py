@@ -121,7 +121,7 @@ def run(a) -> dict:
         img_dir = work / "images"
         prep = frames.prepare_inputs([Path(p) for p in a.inputs], img_dir, max_side=a.max_side,
                                      video_frames=a.video_frames, log=log)
-        rep["input"] = {"images": len(prep["images"]), "sequential": prep["sequential"],
+        rep["input"] = {"images": len(prep["images"]), "sequential": prep["sequential"], "camera_models": prep.get("models"),
                         "skipped_blurry": prep["skipped_blurry"]}
 
         log("2/5 SfM (카메라 자세·렌즈 보정)")
@@ -133,7 +133,8 @@ def run(a) -> dict:
                               camera_params=prep.get("camera_params"), rig=prep.get("rig"),
                               mapper=a.mapper, use_gpu=a.gpu,
                               colmap_bin=a.colmap_bin, features=a.features,
-                              mask_dir=Path(a.masks) if a.masks else None, refine_pp=a.refine_pp,
+                              mask_dir=Path(a.masks) if a.masks else (Path(prep["mask_dir"]) if prep.get("mask_dir") else None),
+                              per_folder=bool(prep.get("per_folder")), refine_pp=a.refine_pp,
                               robust=not a.no_robust, max_side=a.max_side,
                               max_features=a.max_features, log=log)
     rep["sfm"] = st
