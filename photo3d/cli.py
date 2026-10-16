@@ -35,6 +35,24 @@ def run(a) -> dict:
             f.write(line + "\n")
 
     rep: dict = {"version": "0.1.0", "args": vars(a)}
+    # GPU 상태를 처음에 기록하고, VRAM 크기에 맞춰 조밀복원·스플랫 설정을 정한다
+    from . import gpu
+    try:
+        g = gpu.query()
+    except Exception:
+        g = None
+    log(gpu.summary_line(g))
+    plan = gpu.vram_plan(g.get("mem_free_mb"), g.get("mem_total_mb")) if g and g.get("mem_total_mb") else None
+    if plan:
+        os.environ["PHOTO3D_PM_MAX"] = str(plan["pm_max"])
+        os.environ["PHOTO3D_MAX_SPLATS"] = str(plan["splats"])
+        os.environ["PHOTO3D_MOGE"] = plan["moge"]
+        os.environ["PHOTO3D_MOGE_SIDE"] = str(plan["moge_side"])
+        if a.splat_res == 1920:
+            a.splat_res = plan["splat_res"]
+        log(f"  VRAM {plan['vram_gb']}GB 맞춤: 조밀복원 최대 {plan['pm_max']}px · 스플랫 최대 {plan['splats']:,}개 · "
+            f"학습 해상도 {a.splat_res}px · 깊이 모델 {plan['moge']}" + (" (다른 프로그램이 VRAM 사용 중 → 낮춤)" if plan.get("busy") else ""))
+    rep["gpu"] = {"info": g, "plan": plan}
     if a.from_colmap:
         # 외부 모델(MapAnything·VGGT 등 적은 장수용)이 계산한 카메라를 이어받는다: <dir>/images, <dir>/sparse
         src = Path(a.from_colmap)

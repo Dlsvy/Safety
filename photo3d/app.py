@@ -497,6 +497,17 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if p in ("/", "/index.html"):
                 return self._file(WEB / "index.html")
+            if p == "/api/gpu":
+                from . import gpu
+                g = gpu.query()
+                exes = [str(Path(sys.executable).resolve())] + [x for x in (find_tools()["colmap"],) if x]
+                from .splat import find_brush
+                b = find_brush(ROOT, download=False)
+                if b:
+                    exes.append(str(Path(b).resolve()))
+                w = gpu.windows_settings(exes)
+                return self._json({"gpu": g, "windows": w, "checks": gpu.checks(g, w),
+                                   "plan": gpu.vram_plan(g.get("mem_free_mb"), g.get("mem_total_mb")) if g and g.get("mem_total_mb") else None})
             if p == "/api/sys":
                 return self._json(system_usage())
             if p == "/api/samples":
@@ -547,6 +558,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         p = unquote(urlparse(self.path).path)
         try:
+            if p == "/api/gpu/tune":  # 이 PC 에서만: 관리자 확인 창을 띄워 GPU 최적 설정(scripts/gpu_tune.ps1)
+                if self.client_address[0] not in ("127.0.0.1", "::1"):
+                    return self._json({"error": "PC 에서만 쓸 수 있습니다"}, 403)
+                if os.name != "nt":
+                    return self._json({"error": "윈도우 PC 에서만 필요한 설정입니다"}, 400)
+                ps1 = ROOT / "scripts" / "gpu_tune.ps1"
+                subprocess.Popen(["powershell", "-NoProfile", "-Command",
+                                  f"Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File \"{ps1}\"'"],
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                return self._json({"ok": True})
             if p == "/api/browse":  # 이 PC 에서만: 윈도우 폴더 선택 창
                 if self.client_address[0] not in ("127.0.0.1", "::1"):
                     return self._json({"error": "PC 에서만 쓸 수 있습니다"}, 403)

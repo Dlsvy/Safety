@@ -62,6 +62,12 @@ button:focus-visible,.btn:focus-visible,input:focus-visible{outline:2px solid va
 .guide .n{font-size:12px;color:var(--muted);margin:4px 0 0}
 details{margin:6px 0 12px;font-size:13px;color:var(--muted)}
 details input{margin-top:6px;width:100%}
+.gl{list-style:none;padding:0;margin:8px 0 0;display:grid;gap:6px}
+.gl li{display:grid;grid-template-columns:22px 150px 1fr;gap:8px;align-items:start;color:var(--fg,inherit)}
+.gl .d{font-size:12px;color:var(--muted);grid-column:3}
+.gl .i{font-weight:700;text-align:center}.gl .ok{color:#3fb950}.gl .warn{color:#d29922}.gl .bad{color:#f85149}.gl .info{color:#8b949e}
+.gplan{margin-top:8px;font-size:12.5px}.gnote{font-size:12px;margin-top:6px}
+@media (max-width:640px){.gl li{grid-template-columns:22px 1fr}.gl .d,.gl .v{grid-column:2}}
 .bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:10px}
 .bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
 .msg{font-size:13px;margin-top:8px;min-height:1.2em}
@@ -179,6 +185,11 @@ details input{margin-top:6px;width:100%}
         <li>공정 기록용 사진은 바닥에 표시한 같은 지점에서 같은 방향으로 찍으면 날짜별 비교가 쉽습니다.</li>
       </ol>
       <p class="n">참고: 엔젤스윙 유저가이드(실내 360 촬영·GCP 권장사항), DJI Terra·PIX4Dcatch 촬영 기준을 폰 촬영에 맞게 옮김</p>
+    </details>
+    <details id="gpuchk"><summary>GPU 점검 (NVIDIA 성능 최대로)</summary>
+      <div id="gpubody">불러오는 중…</div>
+      <div class="row" style="margin-top:8px"><button id="gputune" type="button">GPU 최적 설정 실행 (관리자 확인 · 재부팅 1회)</button></div>
+      <div class="gnote">바꾸는 것: GPU 시간 제한(TDR) 2초→60초(긴 조밀복원이 윈도우에 의해 끊기지 않게) · 전원 계획 고성능 · 앱 실행파일 고성능 GPU 지정. 되돌리기: GPU_TUNE.bat undo</div>
     </details>
     <details><summary>PC 에 있는 폴더로 만들기 / 실측 크기 맞추기</summary>
       <input id="lpath" type="text" placeholder="PC 폴더 경로 (예: C:\photo3d\data\strecha\Benchmarking_Camera_Calibration_2008\castle-P30\images)">
@@ -499,6 +510,24 @@ async function sysTick() {
   } catch (e) {}
 }
 sysTick(); setInterval(sysTick, 2000);
+
+/* ── GPU 점검 ── */
+const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+async function gpuCheck() {
+  try {
+    const d = await api("/api/gpu"), ico = {ok: "✓", warn: "!", bad: "✕", info: "i"};
+    let h = `<ul class="gl">` + d.checks.map((c) => `<li><span class="i ${c.level}">${ico[c.level]}</span><b>${esc(c.item)}</b>
+      <span class="v">${esc(c.value)}</span>${c.fix ? `<span class="d">${esc(c.fix)}</span>` : ""}</li>`).join("") + `</ul>`;
+    const p = d.plan;
+    if (p) h += `<div class="gplan">이 GPU 에 맞춘 처리 설정: 조밀복원 최대 ${p.pm_max}px(부족하면 자동으로 낮춰 재시도) · 스플랫 최대 ${p.splats.toLocaleString()}개 · 학습 해상도 ${p.splat_res}px · 깊이 모델 ${p.moge}${p.busy ? " · 지금 다른 프로그램이 VRAM 사용 중이라 한 단계 낮춤" : ""}</div>`;
+    $("gpubody").innerHTML = h;
+  } catch (e) { $("gpubody").textContent = "GPU 정보를 읽지 못했습니다: " + e.message; }
+}
+$("gpuchk").addEventListener("toggle", () => { if ($("gpuchk").open) gpuCheck(); });
+$("gputune").onclick = async () => {
+  try { await api("/api/gpu/tune", {method: "POST"}); $("gpubody").insertAdjacentHTML("afterbegin", `<div class="gplan">관리자 확인 창에서 '예'를 누르세요. 끝나면 PC 를 한 번 다시 시작하면 적용됩니다.</div>`); }
+  catch (e) { alert(e.message); }
+};
 
 /* ── 3D 뷰어 ── */
 const cv = $("cv");

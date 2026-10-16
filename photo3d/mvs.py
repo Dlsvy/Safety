@@ -175,20 +175,38 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
         # GPU 조밀복원: COLMAP PatchMatchStereo(CUDA) → StereoFusion → OpenMVS 로 가져와 메쉬·텍스처
         if not colmap_bin:
             raise RuntimeError("--dense colmap 은 CUDA 지원 COLMAP 실행파일(--colmap-bin)이 필요합니다")
-        # VRAM 8GB 기준: 원본(-1)은 12MP 이상에서 메모리 부족 위험 → ultra 도 3200px
-        size = {"draft": 1600, "medium": 2400, "high": 3200, "ultra": 3200}[quality]
+        # 해상도: VRAM 맞춤 상한(gpu.vram_plan, 8GB → 4000px) 안에서 품질별로. 메모리 부족으로 실패하면
+        # 한 단계씩 낮춰 다시(남는 VRAM 을 최대한 쓰되 처리는 실패하지 않게)
+        cap = int(os.environ.get("PHOTO3D_PM_MAX", 3200))
+        size = {"draft": 2000 if cap >= 3200 else 1600, "medium": 2400, "high": 3200, "ultra": cap}[quality]
+        size = min(size, cap)
         fast = quality == "draft"
-        # 형상 일관성(geom_consistency)은 빠른 모드에서도 켠다: 끄면 하늘·그늘·비스듬한 지면의 틀린 깊이가
-        # 걸러지지 않아 카메라 쪽으로 뻗는 '가시'가 생긴다(PC castle-P19). 빠른 모드는 반복만 줄인다.
-        _run([colmap_bin, "patch_match_stereo", "--workspace_path", str(dense),
-              "--workspace_format", "COLMAP", "--PatchMatchStereo.geom_consistency", "1",
-              "--PatchMatchStereo.max_image_size", str(size), "--PatchMatchStereo.gpu_index", "0",
-              "--PatchMatchStereo.filter_min_ncc", "0.15"]
-             + (["--PatchMatchStereo.num_iterations", "4", "--PatchMatchStereo.window_step", "2"] if fast else []),
-             mvs, log, logf)
+        from .gpu import ram_gb
+        cache = str(max(4, int(ram_gb() * 0.5)))  # 깊이 지도 캐시는 PC 메모리(RAM)의 절반까지
+        ladder = [size] + [s_ for s_ in (int(size * 0.8), int(size * 0.6)) if s_ >= 1200]
+        for k, size in enumerate(ladder):
+            for sub in ("depth_maps", "normal_maps", "consistency_graphs"):
+                shutil.rmtree(dense / "stereo" / sub, ignore_errors=True)
+                (dense / "stereo" / sub).mkdir(parents=True, exist_ok=True)
+            try:
+                # 형상 일관성(geom_consistency)은 빠른 모드에서도 켠다: 끄면 하늘·그늘·비스듬한 지면의 틀린 깊이가
+                # 걸러지지 않아 카메라 쪽으로 뻗는 '가시'가 생긴다(PC castle-P19). 빠른 모드는 반복만 줄인다.
+                _run([colmap_bin, "patch_match_stereo", "--workspace_path", str(dense),
+                      "--workspace_format", "COLMAP", "--PatchMatchStereo.geom_consistency", "1",
+                      "--PatchMatchStereo.max_image_size", str(size), "--PatchMatchStereo.gpu_index", "0",
+                      "--PatchMatchStereo.filter_min_ncc", "0.15", "--PatchMatchStereo.cache_size", cache]
+                     + (["--PatchMatchStereo.num_iterations", "4", "--PatchMatchStereo.window_step", "2"] if fast else []),
+                     mvs, log, logf)
+                break
+            except RuntimeError as e:
+                if k == len(ladder) - 1:
+                    raise
+                log(f"  조밀복원 {size}px 실패 → {ladder[k + 1]}px 로 다시 ({str(e).splitlines()[-1].strip()[:120]})")
+        log(f"  조밀복원 해상도 {size}px")
         fused = dense / "fused_raw.ply"
         _run([colmap_bin, "stereo_fusion", "--workspace_path", str(dense), "--workspace_format", "COLMAP",
               "--input_type", "geometric", "--StereoFusion.max_image_size", str(size),
+              "--StereoFusion.cache_size", cache,
               "--StereoFusion.min_num_pixels", "4", "--StereoFusion.max_reproj_error", "1.5",
               "--StereoFusion.max_depth_error", "0.008", "--StereoFusion.max_normal_error", "8",
               "--output_path", str(fused)], mvs, log, logf)

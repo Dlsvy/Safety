@@ -88,7 +88,7 @@ def _growth_flags(brush: str, steps: int) -> list[str]:
                            encoding="utf-8", errors="replace").stdout
     except Exception:
         return []
-    want = [("--max-splats", "3000000"),             # 8GB 기준 상한
+    want = [("--max-splats", os.environ.get("PHOTO3D_MAX_SPLATS", "3000000")),  # VRAM 맞춤(8GB 300만)
             ("--growth-grad-threshold", "0.0015"),   # 기본 0.0025 → 더 쉽게 증식
             ("--growth-select-fraction", "0.4"),
             ("--growth-stop-iter", str(int(steps * 0.7)))]

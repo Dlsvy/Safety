@@ -12,11 +12,28 @@ MoGe-2 (Microsoft, MIT, https://github.com/microsoft/MoGe): 사진 한 장 → �
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 
 import numpy as np
 
 _MODEL = None
+
+
+def release() -> None:
+    """깊이 모델을 GPU 메모리에서 내린다 — 바로 뒤에 스플랫 학습(Brush)이 같은 GPU 를 쓰므로"""
+    global _MODEL
+    if _MODEL is None:
+        return
+    _MODEL = None
+    try:
+        import gc
+        import torch
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
 
 
 def ensure_installed(log=print) -> bool:
@@ -45,8 +62,18 @@ def _model(name: str | None, log=print):
     global _MODEL
     if _MODEL is None:
         import torch
-        if name is None:  # GPU 면 큰 모델(정확), CPU 면 작은 모델(빠름)
-            name = "Ruicheng/moge-2-vitl-normal" if torch.cuda.is_available() else "Ruicheng/moge-2-vitb-normal"
+        if name is None:  # GPU 면 큰 모델(정확), CPU 면 작은 모델(빠름) — VRAM 작으면 gpu.vram_plan 이 vitb 지정
+            big = torch.cuda.is_available() and os.environ.get("PHOTO3D_MOGE", "vitl") == "vitl"
+            name = "Ruicheng/moge-2-vitl-normal" if big else "Ruicheng/moge-2-vitb-normal"
+        if torch.cuda.is_available():
+            # Ampere 이후 GPU 의 텐서코어 사용(TF32) + 입력 크기가 같은 반복 추론에 맞는 cuDNN 알고리즘 자동 선택
+            try:  # PyTorch 2.9+ 새 방식(옛 allow_tf32 와 섞어 쓰지 말 것 — PyTorch CUDA 문서)
+                torch.backends.cuda.matmul.fp32_precision = "tf32"
+                torch.backends.cudnn.conv.fp32_precision = "tf32"
+            except AttributeError:
+                torch.backends.cuda.matmul.allow_tf32 = True
+                torch.backends.cudnn.allow_tf32 = True
+            torch.backends.cudnn.benchmark = True  # 사진 크기가 모두 같아 같은 알고리즘 재사용
         from moge.model.v2 import MoGeModel
         dev = "cuda" if torch.cuda.is_available() else "cpu"
         log(f"  깊이 prior 모델 불러오기: {name} ({dev})")
@@ -64,13 +91,15 @@ def _zbuffer(uv: np.ndarray, z: np.ndarray, w: int, h: int) -> np.ndarray:
 
 
 def fill(dense_xyz: np.ndarray, dense_rgb: np.ndarray | None, sparse: Path, img_dir: Path,
-         side: int = 640, model: str | None = None, rel_tol: float = 0.03,
+         side: int | None = None, model: str | None = None, rel_tol: float = 0.03,
          stride: int = 2, neighbors: int = 8, log=print) -> dict:
     import cv2
     import torch
     from scipy.ndimage import binary_dilation
     from .texture import _cameras, _project
     net, dev = _model(model, log)
+    if side is None:
+        side = int(os.environ.get("PHOTO3D_MOGE_SIDE", "768" if dev == "cuda" else "640"))
     cams = _cameras(sparse, img_dir)
     views = []
     for ci, cam in enumerate(cams):
@@ -161,9 +190,11 @@ def fill(dense_xyz: np.ndarray, dense_rgb: np.ndarray | None, sparse: Path, img_
             nrms.append(v["nrm"][vs[keep], us[keep]] @ R)
         nsup.append(sup[keep])
     if not pts:
+        release()
         return {"xyz": np.zeros((0, 3)), "rgb": np.zeros((0, 3), np.uint8), "normal": None, "views_used": len(good)}
     P = np.concatenate(pts)
     C = np.concatenate(cols).astype(np.uint8)
     N = np.concatenate(nrms) if nrms else None
     log(f"  깊이 prior 로 채운 점 {len(P):,}개 (다른 사진과 일치·빈 공간 위반 없음)")
+    release()
     return {"xyz": P, "rgb": C, "normal": N, "views_used": len(good)}
