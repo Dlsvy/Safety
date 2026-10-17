@@ -337,6 +337,19 @@ def run(a) -> dict:
                                 rep["fuse"]["best_mesh"] = mi
                     except Exception as e:
                         log(f"  최적 합성 메쉬 생략: {e}")
+                    # 보이는 모델: MeshSplatting 불투명 메쉬(설치돼 있고 빠른 모드가 아닐 때 — 30,000스텝 고정)
+                    try:
+                        from . import meshsplat
+                        if meshsplat.find_meshsplat() is not None:
+                            if a.profile == "fast":
+                                log("  MeshSplatting 생략(빠른 모드 — 기본·최고 품질에서 실행)")
+                            else:
+                                mp = meshsplat.run(work / "dense", work / "meshsplat", log=log)
+                                oi = mp and meshsplat.opaque_model(mp, work / "dense", out / "site_opaque_mesh.glb", log=log)
+                                if oi:
+                                    rep["fuse"]["opaque_mesh"] = oi
+                    except Exception as e:
+                        log(f"  불투명 모델 생략: {e}")
                     rep["splat"]["splats"] = fi["after"]
                     try:
                         from .splatexport import write_spz, write_splat

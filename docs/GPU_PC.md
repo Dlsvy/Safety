@@ -47,7 +47,10 @@ python -m photo3d run photos --features aliked --gpu --colmap-bin $env:COLMAP_BI
 ## 비상업 라이선스 (사용자 확인: 비상업 용도 → 사용 가능, 2026-10-17)
 - **PGSR(사용 중)**: 통합 탭의 형태 메쉬. `scripts/gpu/setup_pgsr_windows.ps1` 로 설치(CUDA 12.8 + VS Build Tools 필요).
   설치돼 있으면 자동으로 쓰고, 없거나 실패하면 Spirula 메쉬로 대신한다(photo3d/pgsr.py).
-- 후보(아직 미연결): 2DGS, GOF, RaDe-GS, MILo, MASt3R/MASt3R-SfM, π³, VGGT 기본 가중치 — 상업 용도로 바뀌면 PGSR 포함 모두 빼야 함.
+- **MeshSplatting(사용 중)**: 통합 탭(기본·최고 품질)의 '불투명 모델'(site_opaque_mesh.glb, 유니티 보기 모델).
+  `scripts/gpu/setup_meshsplat_windows.ps1` 로 설치(PGSR 과 같은 CUDA·VS). 30,000스텝 고정(학습 스케줄이 그 기준), 빠른 모드는 생략.
+- 검토 후 제외: MILo(MeshSplatting 이 대체), OMG(이미 .spz 압축).
+- 후보(아직 미연결): 2DGS, GOF, RaDe-GS, MASt3R/MASt3R-SfM, π³, VGGT 기본 가중치 — 상업 용도로 바뀌면 PGSR 포함 모두 빼야 함.
 
 ## 클라우드에서 가중치 쓰기 (필요할 때)
 클라우드는 Hugging Face·GitHub 릴리스·LFS 가 막혀 있다. 라이선스가 재배포를 허용하는(Apache/MIT) 가중치에 한해

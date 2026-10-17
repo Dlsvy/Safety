@@ -592,6 +592,7 @@ def job_view(job: dict) -> dict:
     v["has_splat"] = (d / "out" / "site_splat.ply").exists()
     v["has_best"] = (d / "out" / "site_best.ply").exists()
     v["has_best_mesh"] = (d / "out" / "site_best_mesh.glb").exists()
+    v["has_opaque"] = (d / "out" / "site_opaque_mesh.glb").exists()
     v["has_ortho"] = (d / "out" / "site_ground_ortho.jpg").exists()
     v["has_survey"] = (d / "out" / "site_ortho.jpg").exists()
     v["has_las"] = (d / "out" / "site_points.las").exists()

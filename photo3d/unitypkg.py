@@ -62,8 +62,9 @@ def write_unity_package(out: Path, name: str, log=print) -> Path | None:
     try:
         assets: list[tuple[str, Path]] = []  # (유니티 경로, 파일)
         base = f"Assets/Photo3DSites/{safe}"
-        vis = next((out / f for f in ("site_best_mesh.glb", "site_model_light.glb", "site_model.glb") if (out / f).exists()),
-                   out / "site_model.glb")  # 최적 합성 메쉬가 있으면 그것을 보기 모델로
+        # 보기 모델: MeshSplatting 불투명 메쉬 > 최적 합성 메쉬 > 가벼운/원본 모델. 충돌 메쉬는 항상 측정 메쉬(site_collider)
+        vis = next((out / f for f in ("site_opaque_mesh.glb", "site_best_mesh.glb", "site_model_light.glb", "site_model.glb")
+                    if (out / f).exists()), out / "site_model.glb")
         if not vis.exists() or not (out / "site_collider.glb").exists():
             return None
         for glb, stem in ((vis, "site_model"), (out / "site_collider.glb", "site_collider"),

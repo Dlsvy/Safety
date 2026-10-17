@@ -88,16 +88,10 @@ def _scene_params(sparse: Path) -> dict:
             "ds": 1000.0 if max_depth < 60 else 60000.0 / max_depth}
 
 
-def run(dense: Path, work: Path, iterations: int = 30000, max_side: int = 1600, log=print,
-        timeout: float = 4 * 3600) -> Path | None:
-    """PGSR 학습 → 메쉬(TSDF). 반환: 메쉬 경로(조밀복원 좌표, Z-up) 또는 None"""
-    f = find_pgsr()
-    if f is None:
-        return None
-    py, d = f
-    _patch(d)
+def prep_data(dense: Path, work: Path, max_side: int) -> tuple[Path, int]:
+    """학습 데이터 폴더(work/data: sparse/0 + images) 와 해상도 배율(-r). 3DGS 계열 학습기가 공통으로 읽는 구조"""
     data = work / "data"
-    if (work).exists():
+    if work.exists():
         shutil.rmtree(work)
     (data / "sparse" / "0").mkdir(parents=True)
     for b in (dense / "sparse").glob("*.bin"):
@@ -106,10 +100,21 @@ def run(dense: Path, work: Path, iterations: int = 30000, max_side: int = 1600, 
         os.symlink(dense / "images", data / "images", target_is_directory=True)
     except OSError:
         shutil.copytree(dense / "images", data / "images")
-    prm = _scene_params(dense / "sparse")
     import pycolmap
     longest = max(max(c.width, c.height) for c in pycolmap.Reconstruction(dense / "sparse").cameras.values())
-    r = max(1, int(np.ceil(longest / max_side)))
+    return data, max(1, int(np.ceil(longest / max_side)))
+
+
+def run(dense: Path, work: Path, iterations: int = 30000, max_side: int = 1600, log=print,
+        timeout: float = 4 * 3600) -> Path | None:
+    """PGSR 학습 → 메쉬(TSDF). 반환: 메쉬 경로(조밀복원 좌표, Z-up) 또는 None"""
+    f = find_pgsr()
+    if f is None:
+        return None
+    py, d = f
+    _patch(d)
+    data, r = prep_data(dense, work, max_side)
+    prm = _scene_params(dense / "sparse")
     model = work / "model"
     logf = open(work / "pgsr.log", "w", encoding="utf-8", errors="replace")
     env = {**os.environ, "PHOTO3D_DS": str(prm["ds"]), "PYTHONIOENCODING": "utf-8"}

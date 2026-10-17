@@ -77,6 +77,12 @@ README.md 에 전체 설명·검증 결과가 있다. 먼저 README 를 읽어�
 - 클라우드 확인: 패치(pytorch3d 제거·깊이 단위) 문법·회전 함수 수치, 장면 값(건물 이웃거리 2.5m/복셀 8mm, Caliterra 24.9m/8.5cm).
   실제 학습·메쉬는 GPU 가 없어 미검증 → 실패하면 work/pgsr/pgsr.log 확인.
 
+## MeshSplatting (2026-10-17, PC 에서 확인 필요)
+- 설치: `scripts/gpu/setup_meshsplat_windows.ps1` → third_party/meshsplat. 통합 탭에서 PGSR 다음에 실행 → 범위 밖(하늘) 면 제거 →
+  사진 텍스처 → site_opaque_mesh.glb(뷰어 '불투명 모델' 버튼, 유니티 패키지 보기 모델 1순위; 충돌 메쉬는 측정 메쉬 그대로).
+- 클라우드 확인: 가짜 학습기 + 저장소의 create_ply.py 로 전 과정(내보내기·자르기·텍스처·GLB). 실제 학습은 미검증 → work/meshsplat/meshsplat.log.
+- 저장소 compile.bat 은 옛 폴더명이라 안 됨 → 설치 스크립트가 세 확장을 직접 빌드. effrdel 은 src 경로 .pth 추가.
+
 ## 지켜야 할 것
 - 사용자는 비상업 용도 → 연구용 라이선스(PGSR 등)도 사용 가능(docs/GPU_PC.md). 상업 용도로 바뀌면 빼야 함.
 - 새 기법은 실사 벤치마크(eval_strecha.py)로 숫자 확인 후 채택(클라우드에서 sift_hq·refine_pp 는 효과 없어 옵션으로만 둠).
