@@ -29,6 +29,10 @@ $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
         -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
 if (-not $vs) { throw "Visual Studio Build Tools(C++)가 없습니다. 설치 후 다시 실행하세요." }
 $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+if (-not $env:CUDA_PATH -or -not (Test-Path (Join-Path $env:CUDA_PATH "bin\nvcc.exe"))) {
+  throw "CUDA Toolkit(nvcc)이 없습니다. CUDA 12.8 설치 후 PowerShell 을 새로 열고 다시 실행하세요."
+}
+Write-Host "CUDA: $env:CUDA_PATH"
 $env:TORCH_CUDA_ARCH_LIST = "7.5;8.6;8.9;12.0"
 $env:DISTUTILS_USE_SDK = "1"
 foreach ($m in @("diff-plane-rasterization", "simple-knn")) {
