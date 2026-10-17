@@ -19,7 +19,7 @@ if (-not (Test-Path "$Venv\Scripts\python.exe")) {
   if (Get-Command py -ErrorAction SilentlyContinue) { py -3.11 -m venv $Venv } else { python -m venv $Venv }
 }
 $Py = Join-Path $Venv "Scripts\python.exe"
-& $Py -m pip install --upgrade pip wheel setuptools ninja
+& $Py -m pip install --upgrade pip wheel "setuptools<82" ninja
 # RTX 50(Blackwell, sm_120)은 PyTorch 2.7+ cu128 이 있어야 돈다. 그 아래 카드도 cu128 로 문제없음
 & $Py -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 # pytorch3d 는 윈도우 설치가 어려워 빼고(photo3d 가 실행 전에 그 함수 하나를 직접 넣어 줌) 나머지만

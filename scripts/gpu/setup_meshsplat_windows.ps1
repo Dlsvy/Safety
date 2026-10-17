@@ -18,7 +18,7 @@ if (-not (Test-Path "$Venv\Scripts\python.exe")) {
   if (Get-Command py -ErrorAction SilentlyContinue) { py -3.11 -m venv $Venv } else { python -m venv $Venv }
 }
 $Py = Join-Path $Venv "Scripts\python.exe"
-& $Py -m pip install --upgrade pip wheel setuptools ninja pybind11 numpy
+& $Py -m pip install --upgrade pip wheel "setuptools<82" ninja pybind11 numpy
 # 저장소 기준 torch 2.7.1 — RTX 50(sm_120)은 cu128 빌드가 필요
 & $Py -m pip install torch==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cu128
 & $Py -m pip install lpips plyfile mediapy opencv-python matplotlib tqdm trimesh scipy gstaichi libigl
