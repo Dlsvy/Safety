@@ -291,14 +291,29 @@ def georeference(rec: pycolmap.Reconstruction, image_dir: Path, marker_size: flo
     report: dict = {"method": "none", "warnings": []}
     obs = detect_markers(rec, image_dir, dict_name, log=log)
     corners: dict[int, dict[int, np.ndarray]] = defaultdict(dict)
-    tri_err = []
+    errs: dict[int, list] = defaultdict(list)
     for (mid, k), o in obs.items():
         r = triangulate(rec, o)
         if r is None:
             continue
         corners[mid][k] = r[0]
-        tri_err.append(r[1])
+        errs[mid].append(r[1])
     markers = {m: np.array([c[k] for k in range(4)]) for m, c in corners.items() if len(c) == 4}
+    # 오검출 거르기: 진짜 마커는 네 모서리가 사진들과 잘 맞고(재투영 4px 이하) 3D 에서 정사각형이다
+    # (Pix4D 건물 사진에서 무늬 하나가 마커로 잡혀 '기준점 1개·재투영 143.92px'로 보고된 적 있음)
+    bad = []
+    for m, Q in list(markers.items()):
+        sides = np.linalg.norm(Q - np.roll(Q, 1, 0), axis=1)
+        diag = np.linalg.norm(Q[[0, 1]] - Q[[2, 3]], axis=1)
+        square = sides.min() > 0.85 * sides.max() and abs(diag[0] - diag[1]) < 0.15 * diag.max() \
+            and abs(diag.mean() / max(sides.mean(), 1e-12) - np.sqrt(2)) < 0.2
+        if np.mean(errs[m]) > 4.0 or not square:
+            bad.append(m)
+            del markers[m]
+    if bad:
+        log(f"  마커 오검출 {len(bad)}개 제외(모서리가 사진과 안 맞거나 정사각형이 아님): ID {bad}")
+        report["markers_rejected"] = bad
+    tri_err = [e for m in markers for e in errs[m]]
     report["markers_triangulated"] = sorted(markers)
     report["marker_corner_reproj_px"] = float(np.mean(tri_err)) if tri_err else None
 

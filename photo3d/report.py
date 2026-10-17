@@ -147,6 +147,15 @@ def write(out: Path, rep: dict, work: Path, log=print) -> Path:
     md = rep.get("model") or {}
     if md.get("faces"):
         row("3D 생성", "메쉬", f"{md['faces']:,}면", INFO, f"충돌용 {md.get('collider_faces', 0):,}면")
+    rg = work / "mvs" / "scene_mesh_planar.json"
+    if rg.exists():  # 건물 정형화(regularize.py) 결과
+        try:
+            r = json.loads(rg.read_text(encoding="utf-8"))
+            row("3D 생성", "평면·모서리 정리", f"표면의 {r['planar_area']:.0%} 평면 · 벽 평면오차 {r['wall_rms_mm']}mm", INFO,
+                f"평면 조각 {r['planes']}개(수직·수평·주축 맞춤 {r['manhattan']}개) · 모서리·꺾임 정점 {r['edge_or_env']:,} · "
+                f"꼭짓점 {r['corner_pts']:,} · 정점 이동 95% {r['move_p95_m'] * 1000:.0f}mm(한도 {r['R_m'] * 1000:.0f}mm)")
+        except Exception:
+            pass
     fl = rep.get("fill") or {}
     if "estimated_area_ratio" in fl:
         er = fl["estimated_area_ratio"]

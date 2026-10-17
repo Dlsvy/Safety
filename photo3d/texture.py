@@ -99,6 +99,19 @@ def bake(mesh, sparse: Path, img_dir: Path, atlas: int = 8192, max_faces: int = 
     except Exception:
         rmi = tri.ray
     K_TOP = 4
+    horiz = np.abs(fn[:, 2]) > 0.8  # 수평 면(좌표는 Z-up)
+    # 사진별 선명도(라플라시안 분산, 중앙값 대비 0.5~1.2) — 흔들린 사진의 점수를 낮춘다
+    lv = []
+    for cam in cams:
+        g = cv2.imread(str(cam["path"]), cv2.IMREAD_GRAYSCALE)
+        if g is None:
+            lv.append(np.nan)
+            continue
+        g = cv2.resize(g, None, fx=min(1.0, 1024 / max(g.shape)), fy=min(1.0, 1024 / max(g.shape)), interpolation=cv2.INTER_AREA)
+        lv.append(float(cv2.Laplacian(g, cv2.CV_64F).var()))
+    lv = np.array(lv)
+    med = np.nanmedian(lv) if np.isfinite(lv).any() else 1.0
+    sharp = np.clip(np.sqrt(np.nan_to_num(lv, nan=med) / max(med, 1e-9)), 0.5, 1.2)
     top_s = np.zeros((nF, K_TOP), np.float32)
     top_c = np.full((nF, K_TOP), -1, np.int32)
     for ci, cam in enumerate(cams):
@@ -121,7 +134,10 @@ def bake(mesh, sparse: Path, img_dir: Path, atlas: int = 8192, max_faces: int = 
         vis = hit >= dn * (1 - 0.01) - 1e-6
         cand = cand[vis]
         f = cam["K"][0, 0]
-        s = (cos[cand] * farea[cand] * (f / np.maximum(z[cand], 1e-9)) ** 2 * cos[cand]).astype(np.float32)
+        # 정면성 cos³(예전 cos²) × 화면상 크기 × 사진 선명도 — 정면에 가깝고 가깝고 선명한 사진이 이긴다
+        s = (cos[cand] ** 3 * farea[cand] * (f / np.maximum(z[cand], 1e-9)) ** 2 * sharp[ci]).astype(np.float32)
+        # 바닥·지붕 평부처럼 수평인 면을 70° 넘게 비스듬히 본 사진은 다른 사진이 없을 때만(재질이 늘어지고 흐려짐)
+        s[horiz[cand] & (cos[cand] < 0.34)] *= 0.02
         # 사진 가장자리는 왜곡·비네팅이 커서 약간 감점
         cu = np.abs(uv[cand, 0] / cam["w"] - 0.5) * 2
         cv_ = np.abs(uv[cand, 1] / cam["h"] - 0.5) * 2

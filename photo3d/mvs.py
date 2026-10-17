@@ -344,9 +344,6 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
               "--PoissonMeshing.trim", "7"], mvs, log, logf)  # color 는 3.9=숫자, 4.x=on/off 라 지정 안 함
         mesh = prune_mesh(mesh, dense / "fused.ply", mvs / "scene_mesh_pruned.ply", strict=3.0 if strict else None,
                           log=log)
-        if not subject:  # 바닥·벽 평평하게, 모서리 곧게(측정 오차 범위 안에서만)
-            from .planes import planarize_mesh
-            mesh = planarize_mesh(mesh, dense / "fused.ply", dense / "sparse", mvs / "scene_mesh_planar.ply", log=log)
     else:
         _run([_bin("ReconstructMesh"), str(dense_scene),
               "-o", str(mvs / "scene_mesh.mvs")] + common, mvs, log, logf)
@@ -362,6 +359,12 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
                 mesh = mvs / "scene_refined.ply"
         except RuntimeError as e:
             log(f"  메쉬 정제 건너뜀: {e}")
+    if not subject:
+        # 건물 정형화: 평평한 벽·바닥은 평평하게(수직·수평·주축), 꺾이는 곳은 날카롭게, 창대·돌출부 깊이는 유지
+        # (예전 planarize_mesh: 평면 10개·1.5 점간격 안만 → 대부분 안 맞춰졌고 OpenMVS 경로는 안 돌았음)
+        from .regularize import regularize_mesh
+        pts = dense / "fused.ply" if engine == "colmap" else mvs / "scene_dense.ply"
+        mesh = regularize_mesh(mesh, pts, mvs / "scene_mesh_planar.ply", log=log)
     if engine == "colmap":
         # Windows OpenMVS TextureMesh 는 검은 텍스처(PC 3회) → 직접 구현한 사진 텍스처 굽기 사용
         colored = _color_from_points(mesh, dense / "fused.ply", mvs, log)
