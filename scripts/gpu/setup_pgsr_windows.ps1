@@ -21,7 +21,9 @@ if (-not (Test-Path "$Venv\Scripts\python.exe")) {
 $Py = Join-Path $Venv "Scripts\python.exe"
 & $Py -m pip install --upgrade pip wheel "setuptools<82" ninja
 # RTX 50(Blackwell, sm_120)은 PyTorch 2.7+ cu128 이 있어야 돈다. 그 아래 카드도 cu128 로 문제없음
-& $Py -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+# torch 2.7.1 고정: 2.8+ 헤더(compiled_autograd.h)는 이미 ::std:: 로 써도 CUDA 12.8 + VS 17.14 에서 C2872 가 남(사용자 PC 2.11 실패).
+#   MeshSplatting 과 같은 2.7.1 은 torch_win_fix.py 로 빌드 성공 확인(2026-10-17). 이미 받은 파일은 pip 캐시에서 재사용
+& $Py -m pip install torch==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cu128
 # pytorch3d 는 윈도우 설치가 어려워 빼고(photo3d 가 실행 전에 그 함수 하나를 직접 넣어 줌) 나머지만
 & $Py -m pip install open3d plyfile opencv-python lpips trimesh tqdm
 # CUDA 확장 컴파일: 'x64 Native Tools' 환경 변수가 필요 → vcvars64 를 불러 같은 창에서 빌드
@@ -40,6 +42,7 @@ $env:TORCH_CUDA_ARCH_LIST = "7.5;8.6;8.9;12.0"
 $env:DISTUTILS_USE_SDK = "1"
 foreach ($m in @("diff-plane-rasterization", "simple-knn")) {
   $log = Join-Path $Dir "build_$m.log"
+  Remove-Item -Recurse -Force "$Dir\PGSR\submodules\$m\build" -ErrorAction SilentlyContinue  # 다른 torch 로 만든 중간 파일 제거
   cmd /c "`"$vcvars`" && `"$Py`" -m pip install --no-build-isolation `"$Dir\PGSR\submodules\$m`" > `"$log`" 2>&1"
   if ($LASTEXITCODE -ne 0) {
     Write-Host "---- 컴파일 오류 줄 (전체 기록: $log) ----"
