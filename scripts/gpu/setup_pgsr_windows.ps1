@@ -33,6 +33,9 @@ if (-not $env:CUDA_PATH -or -not (Test-Path (Join-Path $env:CUDA_PATH "bin\nvcc.
   throw "CUDA Toolkit(nvcc)이 없습니다. CUDA 12.8 설치 후 PowerShell 을 새로 열고 다시 실행하세요."
 }
 Write-Host "CUDA: $env:CUDA_PATH"
+# PyTorch 2.6+ 윈도우 버그: nvcc 로 .cu 를 빌드하면 compiled_autograd.h 에서 "'std': 모호한 기호"(C2872) →
+#   헤더의 std:: 를 ::std:: 로 바꿔 우회(내용은 같음, 한 번만)
+& $Py -c "import re,pathlib,torch; p=pathlib.Path(torch.__file__).parent/'include/torch/csrc/dynamo/compiled_autograd.h'; s=p.read_text(encoding='utf-8') if p.exists() else ''; t=re.sub(r'(?<![\w:])std::','::std::',s); (p.write_text(t,encoding='utf-8'),print('torch 헤더 패치(std 모호성)')) if s and t!=s else None"
 $env:TORCH_CUDA_ARCH_LIST = "7.5;8.6;8.9;12.0"
 $env:DISTUTILS_USE_SDK = "1"
 foreach ($m in @("diff-plane-rasterization", "simple-knn")) {
