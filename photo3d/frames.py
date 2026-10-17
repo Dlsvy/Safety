@@ -162,14 +162,25 @@ def _video_size(video: Path) -> tuple[int, int] | None:
         return None
 
 
+def _duration(video: Path) -> float:
+    """영상 길이(초). 폰 브라우저 녹화(webm)는 머리말에 길이가 없어 'N/A' → 마지막 프레임 시각으로"""
+    out = subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                                   "-of", "default=nw=1:nk=1", str(video)]).decode().strip()
+    try:
+        return float(out)
+    except ValueError:
+        pts = subprocess.check_output(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                                       "packet=pts_time", "-of", "csv=p=0", str(video)]).decode().split()
+        vals = [float(x.strip(",")) for x in pts if x.strip(",").replace(".", "", 1).isdigit()]
+        return max(vals) if vals else 0.0
+
+
 def extract_video(video: Path, out_dir: Path, target_frames: int, max_side: int,
                   pano: bool = False, log=print) -> list[Path]:
     """동영상에서 target_frames 장을 고른다(구간별 최선명 프레임)."""
     tmp = out_dir.parent / "_raw_frames"
     tmp.mkdir(parents=True, exist_ok=True)
-    dur = float(subprocess.check_output([
-        "ffprobe", "-v", "error", "-show_entries", "format=duration",
-        "-of", "default=nw=1:nk=1", str(video)]).decode().strip() or 0)
+    dur = _duration(video)
     # 고를 프레임 1장당 후보 4장을 뽑는다
     fps = max(0.5, min(30.0, 4 * target_frames / max(dur, 1e-3)))
     scale = f"scale='if(gt(iw,ih),min({max_side},iw),-2)':'if(gt(iw,ih),-2,min({max_side},ih))'"
@@ -355,6 +366,11 @@ def prepare_inputs(inputs: list[Path], out_dir: Path, max_side: int = 3200,
                 f.unlink()
             pano_n += len(frames)
             log(f"  360° 영상 → 위치 {len(raw)}곳 × {len(PANO_VIEWS)}방향 = {len(frames)}장")
+        elif v.name.startswith("p3d_fill_") and len(images) >= 20:
+            # 폰 앱 '영상 + 자동 사진': 사진이 주인공, 영상은 사진 사이 빈 곳만 메우는 보조 → 사진 수의 1/3 이하로 적게
+            n_fill = min(per, max(10, len(images) // 3))
+            frames = extract_video(v, sub, n_fill, max_side, log=log)
+            log(f"  보조 영상 {v.name}: 사진 사이를 메울 장면 {len(frames)}장(사진 {len(images)}장이 기본)")
         else:
             frames = extract_video(v, sub, per, max_side, log=log)
         # 동영상이 여러 개면 이름 충돌을 막는다

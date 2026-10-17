@@ -89,6 +89,7 @@ README.md 에 전체 설명·검증 결과가 있다. 먼저 README 를 읽어�
 - PC 앱 오른쪽 위 '📱 폰 연결' → QR. 폰 화면 /m (photo3d/web/m.html, 홈 화면 추가 가능한 웹앱). 서버: photo3d/mobile.py.
 - 짝맞춤 토큰(app_data/mobile_token.txt): PC 밖 요청은 쿠키 p3d 필요. 터널은 localhost 로 들어오므로 Cf-Ray 등 헤더로 원격 판정(_is_local).
 - 카메라는 https 에서만: 같은 와이파이 https://<IP>:8766(자체 서명, cryptography 자동 설치) / 현장은 cloudflared 임시 터널(자동 내려받기).
+- 영상 + 자동 사진(기본 추천): 4K 화면을 녹화하면서 같은 화면에서 좋은 순간을 사진으로(녹화가 끊기지 않게 ImageCapture 안 씀). 영상은 p3d_fill_* 로 올라가 frames.py 가 사진 수의 1/3 이하만 뽑아 빈 곳을 메움. webm 길이 N/A 대응(_duration).
 - 자동 촬영: 프레임 간 이동 누적으로 겹침 75% 에서 촬영, 자이로 25°/s 넘으면 대기, 라플라시안 선명도 중앙값 60% 미만 건너뜀,
   첫 장 뒤 색온도 고정, 줌 최소, 화면 꺼짐 방지, 방향별 한 바퀴 링, GPS → input/_gps.json(frames.exif_gps 가 읽음).
 - 업로드: IndexedDB 대기열, 4MB 조각 이어 올리기(PUT files?offset=), 업로드 끝나면 자동 3D 시작(start 에 mode·kind).

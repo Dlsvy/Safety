@@ -59,7 +59,8 @@ button:disabled{opacity:.45}
   <div class="muted" id="conn">PC 연결 확인 중…</div>
   <h2>현장 이름</h2>
   <input type="text" id="name" maxlength="60" autocomplete="off">
-  <button class="big primary" id="bPhoto">📷 자동 촬영 <span class="muted" style="color:#151719">(추천)</span></button>
+  <button class="big primary" id="bHybrid">🎬 영상 + 자동 사진 <span class="muted" style="color:#151719">(추천)</span></button>
+  <button class="big" id="bPhoto">📷 자동 사진만</button>
   <button class="big" id="bVideo">🎥 동영상 촬영</button>
   <div class="row">
     <label class="btn" for="fCam">📸 기본 카메라</label>
@@ -86,6 +87,7 @@ button:disabled{opacity:.45}
     <span class="pill" id="cnt">0장</span>
     <span class="pill" id="upl">↑ 0</span>
     <span class="pill" id="gpsI">GPS …</span>
+    <span class="pill" id="recI" hidden style="color:#ff6b6b">● REC</span>
     <span style="flex:1"></span>
     <svg id="ring" viewBox="-36 -36 72 72" aria-label="한 바퀴 진행"></svg>
   </div>
@@ -247,9 +249,10 @@ async function askSensors() {  // iOS: 버튼을 누른 순간에만 권한 요�
 
 /* ── 카메라 ── */
 let stream = null, track = null, imgCap = null, wake = null, mode = "photo";
-async function openCamera(forVideo) {
+async function openCamera(kind) {
+  const [w, h] = kind === "video" ? [1920, 1080] : kind === "hybrid" ? [3840, 2160] : [4032, 3024];
   stream = await navigator.mediaDevices.getUserMedia({audio: false, video: {
-    facingMode: {ideal: "environment"}, width: {ideal: forVideo ? 1920 : 4032}, height: {ideal: forVideo ? 1080 : 3024}, frameRate: {ideal: 30}}});
+    facingMode: {ideal: "environment"}, width: {ideal: w}, height: {ideal: h}, frameRate: {ideal: 30}}});
   track = stream.getVideoTracks()[0];
   const caps = track.getCapabilities ? track.getCapabilities() : {}, adv = {};
   if (caps.zoom) adv.zoom = caps.zoom.min;                              // 디지털 줌 끔(화질 손실)
@@ -259,7 +262,7 @@ async function openCamera(forVideo) {
   if (caps.torch) adv.torch = false;
   try { await track.applyConstraints({advanced: [adv]}); } catch {}
   $("vid").srcObject = stream; await $("vid").play().catch(() => {});
-  imgCap = (!forVideo && "ImageCapture" in window) ? new ImageCapture(track) : null;
+  imgCap = (kind === "photo" && "ImageCapture" in window) ? new ImageCapture(track) : null;  // 영상+사진: 녹화가 끊기지 않게 화면 프레임으로
   try { wake = await navigator.wakeLock.request("screen"); } catch {}  // 촬영 중 화면 꺼짐 방지
 }
 function closeCamera() {
@@ -354,6 +357,7 @@ function tick() {
           SEN.rate > 40 ? "너무 빨라요 — 천천히 돌리세요" : "건물 둘레를 천천히 걸으세요", SEN.rate > 40 ? "var(--bad)" : null);
     return;
   }
+  if (mode === "hybrid" && rec) $("recI").textContent = `● ${fmtT((now - recT0) / 1000)}`;
   if (!A.auto) { guide("", ""); return; }
   if (A.shots === 0) {
     if (steady && sharpOk && now - A.lastShot > 800) return shoot("첫 장");
@@ -403,15 +407,18 @@ function pickMime() {
 }
 function startRec() {
   const mime = pickMime(); chunks = [];
-  rec = new MediaRecorder(stream, mime ? {mimeType: mime, videoBitsPerSecond: 16e6} : {videoBitsPerSecond: 16e6});
+  const bps = mode === "hybrid" ? 12e6 : 16e6;  // 영상+사진: 영상은 보조라 조금 낮게(업로드 용량)
+  rec = new MediaRecorder(stream, mime ? {mimeType: mime, videoBitsPerSecond: bps} : {videoBitsPerSecond: bps});
   rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
   rec.onstop = () => {
     const type = rec.mimeType || mime || "video/webm", ext = type.includes("mp4") ? "mp4" : "webm";
-    const t = new Date(), nm = `p3d_${t.toISOString().slice(0, 19).replace(/[-:T]/g, "")}.${ext}`;
-    enqueue(new Blob(chunks, {type}), nm, SEN.gps); rec = null; $("shut").classList.remove("rec");
-    A.shots++; $("cnt").textContent = `영상 ${A.shots}개`;
+    const t = new Date(), stamp = t.toISOString().slice(0, 19).replace(/[-:T]/g, "");
+    const nm = mode === "hybrid" ? `p3d_fill_${stamp}.${ext}` : `p3d_${stamp}.${ext}`;  // fill: PC 가 사진 빈 곳만 메우는 보조 영상
+    enqueue(new Blob(chunks, {type}), nm, SEN.gps); rec = null; $("shut").classList.remove("rec"); $("recI").hidden = true;
+    if (mode === "video") { A.shots++; $("cnt").textContent = `영상 ${A.shots}개`; }
   };
-  rec.start(1000); recT0 = performance.now(); $("shut").classList.add("rec");
+  rec.start(1000); recT0 = performance.now();
+  if (mode === "video") $("shut").classList.add("rec"); else $("recI").hidden = false;
 }
 
 /* ── 화면 흐름 ── */
@@ -425,9 +432,10 @@ async function startCapture(kind) {
   A.bins.fill(0); wbLocked = false; drawRing();
   $("cnt").textContent = kind === "video" ? "영상 0개" : "0장";
   $("autoB").hidden = kind === "video";
-  try { await openCamera(kind === "video"); }
+  try { await openCamera(kind); }
   catch (e) { show("home"); alert("카메라를 열 수 없습니다: " + e.message); return; }
   A.timer = setInterval(tick, 125); renderUp(await qAll());
+  if (kind === "hybrid") setTimeout(() => { if (stream && !rec) startRec(); }, 600);  // 영상은 바로 녹화 시작
 }
 let sensorsStarted = false;
 function stopCapture() {
@@ -436,6 +444,7 @@ function stopCapture() {
   closeCamera();
 }
 $("bPhoto").onclick = () => startCapture("photo");
+$("bHybrid").onclick = () => startCapture("hybrid");
 $("bVideo").onclick = () => startCapture("video");
 $("autoB").onclick = () => { A.auto = !A.auto; $("autoB").textContent = A.auto ? "자동 ON" : "자동 OFF"; $("autoB").classList.toggle("on", A.auto); };
 $("shut").onclick = () => {
@@ -447,9 +456,9 @@ function toDone() {
   const cur = ST.get(); if (!cur) { show("home"); return; }
   $("dName").textContent = cur.name;
   const n = cur.total || 0, warn = [];
-  if (mode === "photo" && n && n < 20) warn.push(`사진이 ${n}장으로 적습니다. 3D 가 끊길 수 있어요 — 40장 이상 권장(<b>더 찍기</b>)`);
+  if (mode !== "video" && n && n < 20) warn.push(`사진이 ${n}장으로 적습니다. 3D 가 끊길 수 있어요 — 40장 이상 권장(<b>더 찍기</b>)`);
   const cov = A.bins.filter((b) => b > 0).length;
-  if (mode === "photo" && SEN.heading !== null && cov < 18 && n >= 20) warn.push(`둘레의 ${Math.round(100 * cov / 24)}% 만 찍었습니다. 한 바퀴를 다 돌면 빈 면이 없습니다.`);
+  if (mode !== "video" && SEN.heading !== null && cov < 18 && n >= 20) warn.push(`둘레의 ${Math.round(100 * cov / 24)}% 만 찍었습니다. 한 바퀴를 다 돌면 빈 면이 없습니다.`);
   $("dWarn").innerHTML = warn.map((w) => `<div class="warn">${w}</div>`).join("");
   show("done"); pump();
 }
@@ -508,7 +517,7 @@ function defaultName() { const t = new Date(); return `현장 ${t.getMonth() + 1
 (async function init() {
   if (location.search.includes("t=")) history.replaceState(null, "", "/m");  // 연결 코드는 쿠키로 기억 — 주소창에서 지움
   $("name").value = defaultName();
-  if (!window.isSecureContext || !navigator.mediaDevices) { $("secwarn").hidden = false; $("bPhoto").disabled = $("bVideo").disabled = true; }
+  if (!window.isSecureContext || !navigator.mediaDevices) { $("secwarn").hidden = false; $("bPhoto").disabled = $("bVideo").disabled = $("bHybrid").disabled = true; }
   if ("serviceWorker" in navigator && window.isSecureContext) navigator.serviceWorker.register("/m/sw.js", {scope: "/m"}).catch(() => {});
   show("home");
   await refreshJobs(); pump();
