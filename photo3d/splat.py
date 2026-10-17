@@ -163,6 +163,8 @@ def subject_points(dense: Path, masks: Path, min_ratio: float = 0.6) -> np.ndarr
 
 def start_splat_spirula(dense: Path, exe: str, steps: int = 30000, max_res: int = 1920, log=print,
                         subject: bool = False, depth_sup: bool = False) -> dict:
+    # depth_sup: 깊이 지도 학습. 기본 끔 — 깊이가 사진 한 장에서 추정한 값(MoGe)이라 최고 품질에서 켰더니
+    # 화질이 떨어졌다(Spirula 도 기본 끔, 레이저 깊이로도 PSNR 은 그대로라고 함). 레이저 스캔 깊이가 있을 때만 쓸 것
     """Spirula 학습을 백그라운드로: ① 표면 방향 지도(MoGe-2, MIT) ② 학습(노출 보정·잡티 억제·조밀 점 시작)."""
     import math
     work = dense.parent / "splat"
@@ -195,7 +197,7 @@ def start_splat_spirula(dense: Path, exe: str, steps: int = 30000, max_res: int 
              "--floater-suppression", "mild", "--train-resolution-divisor", str(div),
              "--output-dir-prefix", str(runs), "--output-dir-name", "run",
              "--steps-per-save", os.environ.get("PHOTO3D_SPIRULA_SAVE", "2000")] \
-        + (["--depth-supervision-weight", "0.05"] if depth_sup else [])  # 최고 품질: 깊이도 지도(흰 벽 평평하게)
+        + (["--depth-supervision-weight", "0.05"] if depth_sup else [])  # 레이저 깊이가 있을 때만(위 주석)
     log(f"  $ spirula train --total-steps {steps} (표면 방향 지도 → 학습, 해상도 1/{div}, 최대 {int(cap):,}개, 백그라운드 GPU)")
     logf = open(work / "brush.log", "w", encoding="utf-8", errors="replace")  # 진행 표시가 같은 파일을 읽음
     steps_ = [geo, train]

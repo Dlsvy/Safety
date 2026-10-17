@@ -60,8 +60,10 @@ def run(a) -> dict:
         os.environ["PHOTO3D_MAX_SPLATS"] = str(cap)
         # Spirula 는 압축 학습이라 같은 VRAM 에 더 많이(README: 8GB 에 1,000만). 최고 품질은 Spirula 의
         # quality=high/ultra 기준(300만·5만 스텝 / 1,000만·8만 스텝)으로 더 잘게 쪼개 세밀하게
+        # 8GB 는 Spirula 자체 quality=high(300만·5만 스텝)와 같게: 500만으로 올렸더니 오히려 화질이 떨어졌다는
+        # 사용자 보고(Spirula: "개수만 늘리고 학습을 그만큼 안 늘리면 다듬어지지 않은 스플랫만 늘어난다")
         if a.profile == "gpu-max":
-            sp_cap, sp_steps = (10_000_000, 80_000) if plan["vram_gb"] >= 11 else (5_000_000, 50_000)
+            sp_cap, sp_steps = (10_000_000, 80_000) if plan["vram_gb"] >= 11 else (3_000_000, 50_000)
             os.environ["PHOTO3D_SPIRULA_CAP"] = str(sp_cap)
             os.environ["PHOTO3D_SPIRULA_STEPS"] = str(sp_steps)
             os.environ["PHOTO3D_SPIRULA_RES"] = "3200"
@@ -175,8 +177,7 @@ def run(a) -> dict:
                 sp_exe = splat.find_spirula(root, log=log) if a.splat_engine in ("auto", "spirula") else None
                 if sp_exe:
                     side["splat"] = splat.start_splat_spirula(dense_dir, sp_exe, steps=a.splat_steps,
-                                                              max_res=a.splat_res, log=log, subject=a.subject,
-                                                              depth_sup=a.profile == "gpu-max")
+                                                              max_res=a.splat_res, log=log, subject=a.subject)
                     eng = "Spirula"
                 else:
                     brush = splat.find_brush(root, log=log)
