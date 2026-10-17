@@ -795,7 +795,7 @@ def _ram() -> tuple[float, float] | None:
 def _gpu() -> dict | None:
     """nvidia-smi 로 GPU 사용률·메모리·온도 (1.5초 캐시)"""
     now = time.time()
-    if now - _SYS["gpu_t"] < 1.5:
+    if now - _SYS["gpu_t"] < 0.9:  # 화면이 1초마다 그린다
         return _SYS["gpu"]
     _SYS["gpu_t"] = now
     if _SYS["nvsmi"] is None:
@@ -817,11 +817,59 @@ def _gpu() -> dict | None:
     return _SYS["gpu"]
 
 
+_USAGE = {"t": 0.0, "v": None}
+
+
 def system_usage() -> dict:
+    # 화면이 1초마다 묻는다(폰·PC 여러 개면 더 자주) → 0.8초 안에는 같은 값(nvidia-smi 를 매번 띄우지 않게)
+    if _USAGE["v"] is not None and time.time() - _USAGE["t"] < 0.8:
+        return _USAGE["v"]
     ram = _ram()
-    return {"cpu": _cpu_percent(), "cores": os.cpu_count(),
-            "ram_used": round(ram[0], 1) if ram else None, "ram_total": round(ram[1], 1) if ram else None,
-            "gpu": _gpu()}
+    v = {"cpu": _cpu_percent(), "cores": os.cpu_count(),
+         "ram_used": round(ram[0], 1) if ram else None, "ram_total": round(ram[1], 1) if ram else None,
+         "gpu": _gpu()}
+    _USAGE.update(t=time.time(), v=v)
+    return v
+
+
+def photo_dir(q: dict) -> Path | None:
+    """사진 보기 창에 보여줄 폴더: 예시(sample=이름) 또는 작업(job=id)의 사진. 그 밖의 경로는 열지 않는다(같은 와이파이에서 접속 가능)"""
+    if q.get("sample"):
+        for x in list_samples():
+            if x["name"] == q["sample"][0] and x.get("path"):
+                return Path(x["path"])
+        return None
+    if q.get("job") and re.fullmatch(r"[0-9a-f]{12}", q["job"][0]):
+        d = job_dir(q["job"][0])
+        for c in (d / "out" / "work" / "images", d / "input"):
+            if c.is_dir() and any(f.suffix.lower() in IMG_EXT for f in c.iterdir()):
+                return c
+        try:
+            lp = json.loads((d / "job.json").read_text(encoding="utf-8")).get("local_path")
+            if lp and Path(lp).is_dir():
+                return Path(lp)
+        except Exception:
+            pass
+    return None
+
+
+def photo_thumb(src: Path, w: int) -> Path:
+    """빠른 미리보기 그림(긴 변 w px) — JPEG 는 축소 해독(draft)이라 큰 사진도 빠르다. 한 번 만들면 저장해 둔다"""
+    import hashlib
+    from PIL import Image, ImageOps
+    st = src.stat()
+    key = hashlib.sha1(f"{src.resolve()}|{st.st_mtime_ns}|{st.st_size}|{w}".encode()).hexdigest()
+    dst = DATA / "thumbs" / f"{key}.jpg"
+    if not dst.exists():
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        im = Image.open(src)
+        im.draft("RGB", (w, w))
+        im = ImageOps.exif_transpose(im).convert("RGB")
+        im.thumbnail((w, w))
+        tmp = dst.with_suffix(".tmp")
+        im.save(tmp, "JPEG", quality=82)
+        os.replace(tmp, dst)
+    return dst
 
 
 # ── HTTP ──────────────────────────────────────────────
@@ -850,7 +898,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
 
-    def _file(self, path: Path, ctype: str | None = None, download: str | None = None):
+    def _file(self, path: Path, ctype: str | None = None, download: str | None = None, cache: int = 0):
         if not path.is_file():
             return self._json({"error": "없음"}, 404)
         types = {".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css",
@@ -880,6 +928,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype or types.get(path.suffix.lower(), "application/octet-stream"))
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(end - start + 1))
+        if cache:  # 사진 미리보기처럼 바뀌지 않는 것 — 휠로 넘길 때 다시 받지 않게
+            self.send_header("Cache-Control", f"max-age={cache}")
         if download:  # 한글 파일 이름(RFC 5987)
             from urllib.parse import quote
             self.send_header("Content-Disposition", f"attachment; filename=\"download{path.suffix}\"; "
@@ -925,6 +975,20 @@ class Handler(BaseHTTPRequestHandler):
                                    "plan": gpu.vram_plan(g.get("mem_free_mb"), g.get("mem_total_mb")) if g and g.get("mem_total_mb") else None})
             if p == "/api/sys":
                 return self._json(system_usage())
+            if p == "/api/photos":  # 사진 보기 창: 사진 목록
+                d = photo_dir(parse_qs(u.query))
+                if d is None:
+                    return self._json({"items": []})
+                names = sorted(f.name for f in d.iterdir() if f.suffix.lower() in IMG_EXT)
+                return self._json({"items": names, "dir": d.name})
+            if p == "/api/photo_thumb":
+                q = parse_qs(u.query)
+                d = photo_dir(q)
+                name = q.get("f", [""])[0]
+                if d is None or "/" in name or "\\" in name or not (d / name).is_file():
+                    return self._json({"error": "없음"}, 404)
+                w = min(2048, max(64, int(q.get("w", ["320"])[0])))
+                return self._file(photo_thumb(d / name, w), cache=3600)
             if p == "/api/samples":
                 return self._json({"samples": list_samples(), "download": _sample_dl, "site": _site_dl})
             if p == "/api/jobs":
@@ -961,6 +1025,13 @@ class Handler(BaseHTTPRequestHandler):
                 if base not in q.parents or not q.is_file():
                     return self._json({"error": "없음"}, 404)
                 return self._file(q)
+            m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/rev", p)
+            if m:  # 미리보기가 바뀌었는지만 가볍게(파일 목록·시각) — 화면이 1초마다 묻는다
+                src = _preview_source(job_dir(m.group(1)))
+                try:
+                    return self._json({"rev": _preview_rev(src) if src else None})
+                except Exception:
+                    return self._json({"rev": None})
             m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/preview", p)
             if m:
                 return self._json(preview_points(job_dir(m.group(1))))

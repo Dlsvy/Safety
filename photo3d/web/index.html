@@ -126,6 +126,30 @@ details input{margin-top:6px;width:100%}
 .pv .cap{position:absolute;left:8px;bottom:6px;font-size:11.5px;color:#cfd3d8}
 @media (max-width:560px){.prog{grid-template-columns:1fr}}
 #livepane{display:none}
+/* 사진 보기 창(넓은 화면 오른쪽): 휠로 한 장씩 */
+body{--pw:clamp(300px,19vw,440px)}
+#photopane{display:none}
+body.hasphotos #photopane{display:flex;flex-direction:column;position:fixed;top:20px;bottom:20px;right:16px;width:var(--pw);
+  background:var(--panel,#1c1f24);border:1px solid var(--line);border-radius:12px;padding:12px;gap:8px;z-index:2}
+body.hasphotos:not(.haslive) .wrap{margin-left:max(16px,calc(50vw - 490px - var(--pw) / 2 - 16px));margin-right:0}
+body.hasphotos.haslive #livepane{right:calc(var(--pw) + 28px) !important}
+#photopane .phead{display:flex;justify-content:space-between;gap:8px;font-size:14px}
+#photopane .phead span{color:var(--muted);font-variant-numeric:tabular-nums}
+#photopane .pmain{flex:0 0 auto;aspect-ratio:4/3;background:#0f1113;border-radius:8px;display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:ns-resize}
+#photopane .pmain img{max-width:100%;max-height:100%;object-fit:contain;display:block}
+#photopane .pname{font:12px var(--mono);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#photopane .pstrip{flex:1;overflow-y:auto;display:grid;grid-template-columns:repeat(3,1fr);gap:4px;align-content:start}
+#photopane .pstrip img{width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:4px;cursor:pointer;opacity:.75;background:#0f1113}
+#photopane .pstrip img.on{opacity:1;outline:2px solid var(--accent)}
+/* 사용량 그래프(최근 90초) */
+.m[data-k][hidden]{display:none !important}
+canvas.spark{width:64px;height:18px;display:block}
+canvas.spark.big{width:100%;height:34px}
+.usage{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:10px;font-size:12px;color:var(--muted)}
+.usage .m{display:flex;flex-direction:column;gap:2px;min-width:0}
+.usage .m .h{display:flex;justify-content:space-between}
+.usage .m b{color:var(--ink);font-variant-numeric:tabular-nums}
+@media (max-width:560px){.usage{grid-template-columns:repeat(2,1fr)}}
 @media (min-width:1500px){
   body.haslive .wrap{margin:0 0 0 max(16px,calc(50vw - 980px));}
   body.haslive #livepane{display:flex;flex-direction:column;position:fixed;top:20px;bottom:20px;
@@ -184,6 +208,9 @@ details input{margin-top:6px;width:100%}
 </style>
 </head>
 <body>
+<aside id="photopane" aria-label="사진 보기"><div class="phead"><b id="phname"></b><span id="phidx"></span></div>
+  <div class="pmain" id="phmain" title="휠: 다음·이전 사진"><img id="phimg" alt=""></div><div class="pname" id="phfile"></div>
+  <div class="pstrip" id="phstrip"></div></aside>
 <aside id="livepane" aria-label="실시간 3D 미리보기"><div class="lhead"><b id="lvname"></b><span id="lvpct"></span></div></aside>
 <div class="wrap">
   <header>
@@ -338,7 +365,7 @@ let THREE, GLTFLoader, OrbitControls;
 const $ = (id) => document.getElementById(id);
 const fmtT = (s) => s ? new Date(s * 1000).toLocaleString("ko-KR", {month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit"}) : "";
 const STATUS = {uploading:"올리는 중", queued:"대기", running:"처리 중", done:"완료", failed:"실패"};
-let picked = [];
+let picked = [], sampleName = null, sampleDesc = "";
 let curKind = "splat";
 function setKind(k) {
   curKind = k === "pg" || k === "fuse" ? k : "splat";
@@ -355,7 +382,7 @@ function setPicked(list) {
   $("chosen").textContent = picked.length ? `${picked.length}개 선택 · ${mb.toFixed(1)} MB` : "선택한 파일 없음";
   updateGo();
 }
-function updateGo(){ $("go").disabled = !(picked.length || $("lpath").value.trim()); }
+function updateGo(){ $("go").disabled = !(picked.length || $("lpath").value.trim()); updatePhotos(); }
 $("files").onchange = (e) => setPicked(e.target.files);
 $("cam").onchange = (e) => setPicked([...picked, ...e.target.files]);
 const MEDIA_RE = /\.(jpe?g|png|heic|tiff?|webp|mp4|mov|m4v|avi|mkv)$/i;
@@ -405,6 +432,7 @@ async function loadSamples() {
         b.textContent = sm.site ? `${sm.desc}` : `${sm.name} · ${sm.desc}`; b.classList.toggle("on", sampleSel === sm.path);
         b.onclick = () => {
           sampleSel = sampleSel === sm.path ? null : sm.path;
+          sampleName = sampleSel ? sm.name : null; sampleDesc = sm.desc;
           $("lpath").value = sampleSel || ""; if (sampleSel && !$("name").value) $("name").value = "예시 " + sm.name;
           if (!sampleSel && $("name").value === "예시 " + sm.name) $("name").value = "";
           $("chosen").textContent = sampleSel ? `예시 ${sm.desc} (${sm.count}장) 선택 — 아래 버튼을 누르세요${sm.license ? " · " + sm.license : ""}` : "선택한 파일 없음";
@@ -536,12 +564,14 @@ function progress(j) {
   let L = live.get(j.id);
   if (!L) {
     const el = document.createElement("div"); el.className = "prog";
-    el.innerHTML = `<div><div class="ptot"><div class="pbar"><i></i></div><span class="ppct"></span></div><ol class="steps"></ol><div class="pel"></div><div class="plog"></div></div>
+    el.innerHTML = `<div><div class="ptot"><div class="pbar"><i></i></div><span class="ppct"></span></div><ol class="steps"></ol><div class="pel"></div><div class="plog"></div>
+      <div class="usage" aria-label="컴퓨터 사용량(최근 90초)">${usageHTML(true)}</div></div>
       <div class="pv"><canvas></canvas><div class="cap">카메라 위치를 계산하면 3D 점이 여기에 나타납니다</div>
       <div class="pvhelp">드래그 회전 · 휠 확대 · 오른쪽 드래그 이동 · 더블클릭 처음 시점</div></div>`;
     L = {el, pv: null, rev: null, started: j.started, pvEl: el.querySelector(".pv")}; live.set(j.id, L);
   }
-  L.started = j.started;
+  L.started = j.started; L.status = j.status;
+  L.el.querySelector(".usage").hidden = j.status !== "running";
   const step = j.status === "queued" ? 0 : Math.max(1, j.step || 1);
   const steps = STEPS;
   L.el.querySelector(".steps").innerHTML = steps.map((t, i) => {
@@ -561,6 +591,12 @@ setInterval(() => {   // 경과 시간은 1초마다
   for (const L of live.values()) if (L.started) {
     const s = Math.floor(Date.now() / 1000 - L.started);
     L.el.querySelector(".pel").textContent = `경과 ${Math.floor(s / 60)}분 ${String(s % 60).padStart(2, "0")}초`;
+  }
+}, 1000);
+setInterval(async () => {   // 미리보기 바뀜 확인: 1초마다 가벼운 질의(파일 목록·시각만) — 계산에는 영향 없음
+  for (const [id, L] of live) {
+    if (L.status !== "running" || L.loading) continue;
+    try { const r = await api(`/api/jobs/${id}/rev`); if (r.rev && r.rev !== L.rev) { L.rev = r.rev; loadPreview(id, L); } } catch (e) {}
   }
 }, 1000);
 async function loadPreview(id, L) {
@@ -629,13 +665,72 @@ async function refresh() {
     const list = $("list"); list.replaceChildren();
     if (!d.jobs.length) list.innerHTML = `<div class="empty">아직 만든 3D 가 없습니다. 위에서 사진이나 영상을 올려 보세요.</div>`;
     d.jobs.forEach((j) => list.append(card(j)));
-    placeLive(d.jobs);
+    placeLive(d.jobs); lastJobs = d.jobs; updatePhotos();
     for (const id of [...live.keys()]) if (!d.jobs.some((j) => j.id === id && (j.status === "running" || j.status === "queued"))) live.delete(id);
     const lan = d.lan.length ? `같은 와이파이의 폰에서 접속: <span class="lan">${d.lan.join("  ")}</span>` : "";
     const gpu = d.tools.colmap ? "GPU(COLMAP) 사용" : "CPU 로 처리(느림)";
     $("tip").innerHTML = `${lan}${lan ? " · " : ""}${gpu} · 버전 ${d.version || "?"}`;
   } catch (e) { $("list").innerHTML = `<div class="empty">앱 서버에 연결할 수 없습니다 — APP.bat 창이 켜져 있는지 확인하세요.</div>`; }
 }
+/* ── 사진 보기 창: 고른 예시·고른 파일·처리 중 작업의 사진을 오른쪽에서 휠로 넘겨 본다 ── */
+const PH = {key: null, items: [], i: 0, url: null, urls: []};
+let lastJobs = [];
+function photoSource() {
+  if (sampleName) return {key: "s:" + sampleName, title: sampleDesc || sampleName, q: `sample=${encodeURIComponent(sampleName)}`};
+  const imgs = picked.filter((f) => /^image\//.test(f.type));
+  if (imgs.length) return {key: "f:" + imgs.length + ":" + imgs[0].name, title: "고른 사진", files: imgs};
+  const run = lastJobs.find((j) => j.status === "running") || null;
+  if (run) return {key: "j:" + run.id, title: run.name, q: `job=${run.id}`};
+  return null;
+}
+async function updatePhotos() {
+  const src = photoSource();
+  const wide = window.matchMedia("(min-width:1900px)").matches || (window.matchMedia("(min-width:1500px)").matches && !document.body.classList.contains("haslive"));
+  document.body.classList.toggle("hasphotos", !!src && wide);
+  if (!src || !wide) return;
+  if (src.key === PH.key) return;
+  PH.key = src.key; PH.i = 0;
+  PH.urls.forEach((u) => URL.revokeObjectURL(u)); PH.urls = [];
+  if (src.files) {
+    PH.urls = src.files.map((f) => URL.createObjectURL(f));
+    PH.items = src.files.map((f, k) => ({name: f.name, small: PH.urls[k], big: PH.urls[k]}));
+  } else {
+    const d = await api(`/api/photos?${src.q}`).catch(() => ({items: []}));
+    if (PH.key !== src.key) return;
+    PH.items = d.items.map((n) => ({name: n, small: `/api/photo_thumb?${src.q}&f=${encodeURIComponent(n)}&w=200`,
+                                    big: `/api/photo_thumb?${src.q}&f=${encodeURIComponent(n)}&w=1280`}));
+  }
+  $("phname").textContent = `사진 — ${src.title}`;
+  const st = $("phstrip"); st.replaceChildren();
+  PH.items.forEach((it, k) => { const im = document.createElement("img"); im.loading = "lazy"; im.decoding = "async";
+    im.src = it.small; im.alt = it.name; im.title = it.name; im.onclick = () => showPhoto(k); st.append(im); });
+  if (!PH.items.length) { $("phidx").textContent = "사진 없음"; $("phimg").removeAttribute("src"); return; }
+  showPhoto(0);
+}
+function showPhoto(k) {
+  if (!PH.items.length) return;
+  PH.i = (k + PH.items.length) % PH.items.length;
+  const it = PH.items[PH.i];
+  $("phimg").src = it.big; $("phfile").textContent = it.name;
+  $("phidx").textContent = `${PH.i + 1} / ${PH.items.length}장`;
+  const st = $("phstrip").children;
+  for (const im of st) im.classList.remove("on");
+  if (st[PH.i]) { st[PH.i].classList.add("on"); st[PH.i].scrollIntoView({block: "nearest"}); }
+  for (const d of [1, 2, 3]) { const n = PH.items[(PH.i + d) % PH.items.length]; if (n) new Image().src = n.big; }   // 다음 사진 미리 받기
+}
+let phWheel = 0;
+$("phmain").addEventListener("wheel", (e) => {   // 휠 한 칸 = 한 장(빠르게 굴리면 여러 장)
+  e.preventDefault();
+  phWheel += e.deltaY;
+  const steps = Math.trunc(phWheel / 60);
+  if (steps) { phWheel -= steps * 60; showPhoto(PH.i + steps); }
+}, {passive: false});
+addEventListener("keydown", (e) => {
+  if (!document.body.classList.contains("hasphotos") || $("viewer").classList.contains("on") || e.target.closest("input,textarea,select")) return;
+  if (e.key === "PageDown") { showPhoto(PH.i + 1); e.preventDefault(); } else if (e.key === "PageUp") { showPhoto(PH.i - 1); e.preventDefault(); }
+});
+addEventListener("resize", () => { PH.key = null; updatePhotos(); });
+
 /* ── 넓은 화면: 처리 중인 작업의 3D 미리보기를 오른쪽 큰 패널로 ── */
 const wideMQ = window.matchMedia("(min-width:1500px)");
 function placeLive(jobs) {
@@ -660,24 +755,63 @@ wideMQ.addEventListener("change", () => refresh());
 try { setKind(localStorage.getItem("kind") || "splat"); } catch (e) { setKind("splat"); }
 refresh(); setInterval(refresh, 3000);
 
-/* ── CPU·GPU 사용량(2초마다) ── */
-function meter(label, pct, text, title) {
-  const p = Math.max(0, Math.min(100, pct || 0)), c = p >= 90 ? "hi" : p >= 60 ? "mid" : "";
-  return `<span class="m" title="${title || ""}">${label}<span class="g"><i class="${c}" style="width:${p}%"></i></span><b>${text}</b></span>`;
+/* ── CPU·GPU 사용량: 1초마다, 최근 90초 그래프(부드럽게 흘러감) — 머리글 + 처리 중 작업 카드 ── */
+const UK = ["cpu", "ram", "gpu", "vram"], ULAB = {cpu: "CPU", ram: "메모리", gpu: "GPU", vram: "GPU메모리"};
+const UH = {cpu: [], ram: [], gpu: [], vram: []}, UT = {}, UTITLE = {};
+let uLast = 0, hasGpu = true;
+function usageHTML(big) {
+  return UK.map((k) => big
+    ? `<div class="m" data-k="${k}"><div class="h"><span>${ULAB[k]}</span><b data-k="${k}"></b></div><canvas class="spark big" data-k="${k}"></canvas></div>`
+    : `<span class="m" data-k="${k}">${ULAB[k]}<canvas class="spark" data-k="${k}"></canvas><b data-k="${k}"></b></span>`).join("");
 }
+$("sys").innerHTML = usageHTML(false);
 async function sysTick() {
   try {
-    const d = await api("/api/sys"), g = d.gpu, out = [];
-    if (d.cpu != null) out.push(meter("CPU", d.cpu, `${Math.round(d.cpu)}%`, `${d.cores}코어`));
-    if (d.ram_total) out.push(meter("메모리", 100 * d.ram_used / d.ram_total, `${d.ram_used}/${d.ram_total}GB`));
-    if (g) {
-      out.push(meter("GPU", g.util, `${Math.round(g.util)}%`, `${g.name} · ${g.temp}°C`));
-      out.push(meter("GPU메모리", 100 * g.mem_used / g.mem_total, `${g.mem_used.toFixed(1)}/${g.mem_total.toFixed(0)}GB`, `${g.temp}°C`));
-    } else out.push(`<span class="m">GPU 정보 없음</span>`);
-    $("sys").innerHTML = out.join("");
+    const d = await api("/api/sys"), g = d.gpu;
+    const v = {cpu: d.cpu, ram: d.ram_total ? 100 * d.ram_used / d.ram_total : null,
+               gpu: g ? g.util : null, vram: g ? 100 * g.mem_used / g.mem_total : null};
+    UT.cpu = d.cpu != null ? `${Math.round(d.cpu)}%` : "–"; UTITLE.cpu = `${d.cores}코어`;
+    UT.ram = d.ram_total ? `${d.ram_used}/${d.ram_total}GB` : "–";
+    UT.gpu = g ? `${Math.round(g.util)}%` : "없음"; UTITLE.gpu = g ? `${g.name} · ${g.temp}°C` : "";
+    UT.vram = g ? `${g.mem_used.toFixed(1)}/${g.mem_total.toFixed(0)}GB` : "–";
+    hasGpu = !!g;
+    for (const k of UK) { const h = UH[k]; h.push(v[k] == null ? null : Math.max(0, Math.min(100, v[k]))); if (h.length > 92) h.shift(); }
+    uLast = performance.now();
+    document.querySelectorAll(".m[data-k]").forEach((el) => { const k = el.dataset.k;
+      el.hidden = !hasGpu && (k === "gpu" || k === "vram"); el.title = UTITLE[k] || ""; });
+    document.querySelectorAll("b[data-k]").forEach((b) => { b.textContent = UT[b.dataset.k] || ""; });
   } catch (e) {}
 }
-sysTick(); setInterval(sysTick, 2000);
+function usageColor(p) { return p >= 90 ? "#f85149" : p >= 60 ? "#d29922" : "#3fb950"; }
+function drawSparks() {
+  const now = performance.now(), frac = Math.min(1, (now - uLast) / 1000);
+  for (const cv of document.querySelectorAll("canvas.spark")) {
+    if (!cv.offsetParent) continue;
+    const w = cv.clientWidth, h = cv.clientHeight, dpr = Math.min(devicePixelRatio, 2);
+    if (cv.width !== Math.round(w * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+    const c = cv.getContext("2d"), H = UH[cv.dataset.k];
+    c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, h);
+    c.fillStyle = "rgba(127,127,127,.15)"; c.fillRect(0, 0, w, h);
+    if (H.length < 2) continue;
+    const n = cv.classList.contains("big") ? 90 : 45, step = w / (n - 1);
+    // 새 값이 오면 왼쪽으로 한 칸 흘러가며(frac) 그린다 → 1초마다 뚝뚝 끊기지 않고 부드럽게
+    const pts = [];
+    for (let i = H.length - 1, j = 0; i >= 0 && j < n + 1; i--, j++) {
+      if (H[i] == null) continue;
+      pts.push([w - (j - 1 + frac) * step - step, h - 1 - (H[i] / 100) * (h - 2)]);
+    }
+    if (pts.length < 2) continue;
+    const col = usageColor(H[H.length - 1] ?? 0);
+    c.beginPath(); c.moveTo(pts[0][0], h);
+    for (const [x, y] of pts) c.lineTo(x, y);
+    c.lineTo(pts[pts.length - 1][0], h); c.closePath();
+    c.fillStyle = col + "40"; c.fill();
+    c.beginPath(); pts.forEach(([x, y], i) => i ? c.lineTo(x, y) : c.moveTo(x, y));
+    c.strokeStyle = col; c.lineWidth = 1.5; c.stroke();
+  }
+  requestAnimationFrame(drawSparks);
+}
+sysTick(); setInterval(sysTick, 1000); requestAnimationFrame(drawSparks);
 
 /* ── GPU 점검 ── */
 async function gpuCheck() {
