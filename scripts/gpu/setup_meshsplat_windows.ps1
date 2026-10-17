@@ -33,6 +33,7 @@ Write-Host "CUDA: $env:CUDA_PATH"
 # PyTorch 2.6+ 윈도우 버그: nvcc 로 .cu 를 빌드하면 compiled_autograd.h 에서 "'std': 모호한 기호"(C2872) →
 #   헤더의 std:: 를 ::std:: 로 바꿔 우회(scripts/gpu/torch_win_fix.py)
 & $Py (Join-Path $PSScriptRoot "torch_win_fix.py")
+& $Py (Join-Path $PSScriptRoot "meshsplat_win_fix.py") "$Dir\mesh-splatting"   # 리눅스 전용 문법(or·uint·sqrt(int)) 고침
 $env:TORCH_CUDA_ARCH_LIST = "7.5;8.6;8.9;12.0"
 $env:DISTUTILS_USE_SDK = "1"
 # effrdel 은 src 바로 아래 모듈(tetutils·intersect)을 쓰므로 README 대로 -e(편집 설치)여야 import 된다
