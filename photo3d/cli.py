@@ -260,7 +260,8 @@ def run(a) -> dict:
             from . import survey
             m = cleaned()
             zc = survey.plan_cut_height([m], cams if len(cams) else None)
-            rep["survey"] = {"ortho": survey.ortho_dsm([m] + extra, out, z_cut=zc, log=log)}
+            rep["survey"] = {"ortho": survey.ortho_dsm([m] + extra, out, z_cut=zc, log=log,
+                                                       photos=(work / "dense" / "sparse", work / "dense" / "images"))}
             if dense_pts:
                 rep["survey"]["points"] = survey.export_points(Path(dense_pts), out, m.bounds, log=log)
         except Exception as e:

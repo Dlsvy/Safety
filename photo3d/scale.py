@@ -260,6 +260,62 @@ def _ray_intersect(C: np.ndarray, D: np.ndarray) -> np.ndarray:
     return np.linalg.solve(A, b)
 
 
+def _gps_fit(rec, ks, name2id, src, dst, log):
+    """사진 GPS ↔ SfM 카메라 위치 닮음변환(축척·방위). 반환 (s, R, t, 수평 RMSE, 방식).
+    - 튀는 GPS 는 Huber 가중으로 약하게
+    - 카메라 GPS 높이는 자주 망가진다(ODM Caliterra: 같은 높이로 날았는데 GPS 고도가 317→431 m 로 계속 증가)
+      → 높이 잔차가 수평보다 2배 넘게 크면 높이를 버리고, 카메라 배치(평면 법선·사진 위쪽)로 수평을 잡은 뒤
+      수평 위치만으로 축척·방위를 맞춘다"""
+    def huber_umeyama(A, B, dims):
+        w = np.ones(len(A))
+        for _ in range(8):
+            ma, mb = (A * w[:, None]).sum(0) / w.sum(), (B * w[:, None]).sum(0) / w.sum()
+            A0, B0 = A - ma, B - mb
+            Hm = (B0 * w[:, None]).T @ A0
+            U, S, Vt = np.linalg.svd(Hm)
+            D = np.eye(dims)
+            D[-1, -1] = np.sign(np.linalg.det(U @ Vt))
+            Rm = U @ D @ Vt
+            sc = float((S * np.diag(D)).sum() / (w * (A0 ** 2).sum(1)).sum())
+            r = np.linalg.norm((sc * (Rm @ A0.T)).T - B0, axis=1)
+            k = 1.5 * max(np.median(r), 1e-6)
+            w = np.where(r <= k, 1.0, k / np.maximum(r, 1e-12))
+        return sc, Rm, mb - sc * Rm @ ma, r, w
+    # 사진 배치로 본 '위'(SfM 좌표): 카메라 위치가 한 평면이면(격자·선회 비행) 그 법선, 아니면 사진 위쪽 평균
+    C0 = src - src.mean(0)
+    ev, evec = np.linalg.eigh(np.cov(C0.T))
+    ups = np.mean([-_pose(rec.image(name2id[k]))[1, :3] for k in ks], 0)
+    fwd = np.mean([_pose(rec.image(name2id[k]))[2, :3] for k in ks], 0)
+    up = evec[:, 0] if (ev[0] < 0.05 * ev[2] and ev[1] > 0.05 * ev[2]) else ups / np.linalg.norm(ups)
+    fwd = fwd / max(np.linalg.norm(fwd), 1e-12)
+    # 방향 맞추기: 대부분 아래를 보고 찍었으면(드론) 시선의 반대가 위, 아니면 사진의 위쪽이 위
+    ref_up = -fwd if abs(float(np.dot(fwd, up))) > 0.5 else ups
+    if float(np.dot(ref_up, up)) < 0:
+        up = -up
+    s, R, t, r, w = huber_umeyama(src, dst, 3)
+    res = (s * (R @ src.T)).T + t - dst
+    h_rms = float(np.sqrt(np.average((res[:, :2] ** 2).sum(1), weights=w)))
+    v_rms = float(np.sqrt(np.average(res[:, 2] ** 2, weights=w)))
+    # GPS 3D 맞춤이 기울인 '위'와 사진 배치의 '위'가 5° 넘게 다르면 GPS 높이가 망가진 것(전체 모델이 기울어짐)
+    tilt = float(np.degrees(np.arccos(np.clip(float(np.dot(R.T @ np.array([0.0, 0.0, 1.0]), up)), -1, 1))))
+    if (tilt <= 5 and v_rms <= 2 * h_rms) or len(src) < 6:
+        return s, R, t, float(np.sqrt(np.average(r ** 2, weights=w))), "3d"
+    x = np.cross([0.0, 1.0, 0.0], up) if abs(up[1]) < 0.9 else np.cross([1.0, 0.0, 0.0], up)
+    x /= np.linalg.norm(x)
+    R0 = np.stack([x, np.cross(up, x), up])
+    L = C0 @ R0.T
+    s2, R2, t2, r2, w2 = huber_umeyama(L[:, :2], dst[:, :2], 2)
+    R3 = np.eye(3)
+    R3[:2, :2] = R2
+    Rt = R3 @ R0
+    # 높이: GPS 높이 중앙값에 카메라 높이 중앙값을 맞춘다(절대 높이는 참고용)
+    z = s2 * L[:, 2]
+    tz = float(np.median(dst[:, 2]) - np.median(z))
+    tt = np.r_[t2, tz] - s2 * (Rt @ src.mean(0))
+    log(f"  사진 GPS 높이가 불안정(GPS 로 맞추면 {tilt:.0f}° 기울어짐, 높이 오차 {v_rms:.1f} m) → 높이는 버리고 수평 위치로 축척·방위")
+    return s2, Rt, tt, float(np.sqrt(np.average(r2 ** 2, weights=w2))), "horizontal"
+
+
 def triangulate_gcp_obs(rec, obs: dict, manifest: dict) -> dict:
     """기준점 픽셀 관측(원본 사진 좌표) → SfM 좌표 3D 점. 사진 2장 이상에 보인 점만."""
     by_src = {v["src"]: (k, v["scale"]) for k, v in manifest.items()}
@@ -400,16 +456,13 @@ def georeference(rec: pycolmap.Reconstruction, image_dir: Path, marker_size: flo
             src = np.array([rec.image(name2id[k]).projection_center() for k in ks])
             spread = float(np.linalg.norm(dst - dst.mean(0), axis=1).max())
             if spread > 5.0:
-                s, R, t = umeyama(src, dst)
-                r = np.linalg.norm((s * (R @ src.T)).T + t - dst, axis=1)
-                keep = r < max(3 * np.median(r), 0.05)  # 튀는 GPS 제외 후 다시
-                if keep.sum() >= 3 and not keep.all():
-                    s, R, t = umeyama(src[keep], dst[keep])
-                    r = np.linalg.norm((s * (R @ src.T)).T + t - dst, axis=1)
-                rmse = float(np.sqrt(np.mean(r[keep] ** 2)))
-                report.update(method="gps_exif", gps_images=int(len(ks)), gps_fit_rmse_m=rmse,
+                s, R, t, rmse, how = _gps_fit(rec, ks, name2id, src, dst, log)
+                n = len(ks)
+                rms_spread = float(np.sqrt(np.mean(np.sum((dst[:, :2] - dst[:, :2].mean(0)) ** 2, 1))))
+                # 축척의 표준오차 ≈ 위치 오차 / (촬영 범위 · √사진 수) — 예전 '맞춤 오차 ÷ 최대 범위'는 수 배 과대
+                report.update(method="gps_exif", gps_images=int(n), gps_fit_rmse_m=rmse, gps_fit=how,
                               gps_spread_m=spread, enu_origin_lla=ref.tolist(),
-                              scale_uncertainty_pct=round(100 * rmse / max(spread, 1e-9), 2))
+                              scale_uncertainty_pct=round(100 * rmse / max(rms_spread * np.sqrt(n), 1e-9), 2))
                 report["warnings"].append(
                     f"축척을 사진 GPS 로 맞춤(맞춤 오차 {rmse:.2f} m, 촬영 범위 {spread:.0f} m → 축척 오차 약 "
                     f"{report['scale_uncertainty_pct']}%). 정밀 측정은 기준점·마커·줄자 거리 필요")

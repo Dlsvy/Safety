@@ -133,6 +133,8 @@ def prune_mesh(mesh_path: Path, points_path: Path, dst: Path, strict: float | No
         thin = el ** 2 / np.maximum(2 * m.area_faces, 1e-12)
         far = d > 20 * sp  # 가시는 수십~수백 배 떨어져 있다(6배는 점이 성긴 실제 표면까지 지움)
         if strict:
+            # (점 밀도에 맞춰 성긴 곳은 4배까지 허용해 봤으나 ETH3D delivery_area 5cm F1 71.5→61.0 으로 나빠져 되돌림:
+            #  성긴 곳을 건너 이은 면은 부정확하다 → 구멍은 그대로 두고 '구멍 메운 모델'(추정 표시)로 보여준다)
             dv, _ = tree.query(m.vertices, workers=-1)
             far |= np.maximum(dv[m.faces].max(1), d) > strict * sp
         needle = (thin > 12) & (el > 8 * np.median(el))

@@ -741,7 +741,8 @@ async function setCompare(on) {
       cv2.addEventListener("dblclick", (e) => { const p = pickAt(e, cv2, camera); if (p) { markPick(p); setPivot(p); } });
     }
     if (cmpModel) { scene2.remove(cmpModel); cmpModel = null; }
-    const j = curJob, file = j.has_light ? "site_model_light.glb" : "site_model.glb";
+    // 메인 보기와 같은 모델(구멍 메운 모델이 있으면 그것)로 비교
+    const j = curJob, file = j.has_filled ? "site_filled.glb" : j.has_light ? "site_model_light.glb" : "site_model.glb";
     new GLTFLoader().load(`/files/${j.id}/${file}`, (g) => { cmpModel = g.scene; basic(cmpModel); scene2.add(cmpModel); });
     if (!useSplat || useOvl) { useOvl = false; useSplat = true; syncToggles(); loadModel(false); }
     $("vinfo").textContent = "왼쪽 실사 · 오른쪽 메쉬 — 한쪽을 돌리면 같이 돕니다 · 더블클릭: 회전 중심 · 클릭 후 F: 확대";
