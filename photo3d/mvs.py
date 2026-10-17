@@ -320,7 +320,7 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
                   "--output_path", str(fused)], mvs, log, logf)
             from .pointfilter import clean_ply
             cams = np.array([rec.image(i).projection_center() for i in rec.reg_image_ids()])
-            fused = clean_ply(fused, dense / "fused.ply", cams, log=log)
+            fused = clean_ply(fused, dense / "fused.ply", cams, log=log, work=dense.parent)
             if fused.name != "fused.ply":
                 shutil.copy2(fused, dense / "fused.ply")
                 fused = dense / "fused.ply"

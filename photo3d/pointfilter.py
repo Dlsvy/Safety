@@ -82,7 +82,7 @@ def clean_points(xyz: np.ndarray, cams: np.ndarray | None = None, vis: np.ndarra
     return keep
 
 
-def clean_ply(src: Path, dst: Path, cams: np.ndarray | None = None, log=print) -> Path:
+def clean_ply(src: Path, dst: Path, cams: np.ndarray | None = None, log=print, work: Path | None = None) -> Path:
     """COLMAP fused.ply(법선·색 포함) → 정리된 PLY. 실패 시 원본 경로를 돌려준다."""
     import trimesh
     try:
@@ -91,6 +91,11 @@ def clean_ply(src: Path, dst: Path, cams: np.ndarray | None = None, log=print) -
         raw = pc.metadata.get("_ply_raw", {}).get("vertex", {}).get("data")
         vis = _read_vis(Path(str(src) + ".vis"), len(xyz))
         keep = clean_points(xyz, cams, vis, log=log)
+        if work is not None:  # 여러 사진 깊이에서 '허공'인 점(얇은 기둥이 시선 방향으로 늘어난 가시) 제거
+            from .visfilter import free_space_mask
+            bad = free_space_mask(xyz, work, log=log)
+            if bad is not None:
+                keep &= ~bad
         if raw is not None:
             data = raw[keep]
             names = data.dtype.names
