@@ -81,7 +81,7 @@ README.md 에 전체 설명·검증 결과가 있다. 먼저 README 를 읽어�
 - 설치: `scripts/gpu/setup_meshsplat_windows.ps1` → third_party/meshsplat. 통합 탭에서 PGSR 다음에 실행 → 범위 밖(하늘) 면 제거 →
   사진 텍스처 → site_opaque_mesh.glb(뷰어 '불투명 모델' 버튼, 유니티 패키지 보기 모델 1순위; 충돌 메쉬는 측정 메쉬 그대로).
 - 클라우드 확인: 가짜 학습기 + 저장소의 create_ply.py 로 전 과정(내보내기·자르기·텍스처·GLB). 실제 학습은 미검증 → work/meshsplat/meshsplat.log.
-- 2026-10-17 사용자 PC(RTX 5060 Ti, CUDA 12.8, VS2022 17.14, torch 2.7.1) 설치 성공. 윈도우 빌드 우회 2가지:
+- 2026-10-17 사용자 PC(RTX 5060 Ti, CUDA 12.8, VS2022 17.14, torch 2.7.1) PGSR·MeshSplatting 둘 다 설치 성공(torch 2.11 은 C2872 로 실패 → 2.7.1 고정). 윈도우 빌드 우회 2가지:
   torch_win_fix.py(torch 헤더 std 모호성 C2872), meshsplat_win_fix.py(or·uint·sqrt(int) 리눅스 전용 문법).
 - 저장소 compile.bat 은 옛 폴더명이라 안 됨 → 설치 스크립트가 세 확장을 직접 빌드. effrdel 은 src 경로 .pth 추가.
 
