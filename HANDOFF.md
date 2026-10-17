@@ -62,6 +62,14 @@ README.md 에 전체 설명·검증 결과가 있다. 먼저 README 를 읽어�
   OpenMVS TextureMesh 실패 시 파이썬 굽기로 대체, 가벼운 보기용 GLB(150만 면↑).
 - 화면: 오른쪽 사진 보기 창(휠), 사용량 1초 그래프(작업 카드에도), 실시간 3D 1초 확인, 현장 예시 7개(하나씩 받기).
 - 해 본 뒤 되돌린 것: 점 밀도 적응 가지치기(ETH3D 5cm F1 71.5→61.0).
+- 해 봤지만 효과 없음(기본값 유지): OpenMVS ReconstructMesh --smooth 0·-d 1.5(office 2cm F1 56.1→53.0),
+  Poisson point_weight 4(55.6→55.5).
+- 최적 합성: site_best.ply(스플랫 + 메쉬 받침, 반투명 막음, 뷰어 기본), 통합 탭은 spirula mesh 로 스플랫 메쉬를 만들어
+  포토그래메트리가 없는 곳만 채운 site_best_mesh.glb(→ 정형화·사진 텍스처). **spirula mesh 는 CUDA 전용 — PC 에서 확인.**
+- 유니티: site_unity.unitypackage(OBJ+스크립트, 가져오면 Site_<이름>.prefab 자동) + 뷰어 '유니티 패키지'.
+  **유니티 에디터에서 실제 가져오기는 아직 확인 못 함.**
+- 가시(삐죽 솟은 선): COLMAP 경로 점군에 빈 공간 검사(visfilter.py) — CPU 에서는 재현 안 됨, PC 결과로 확인 필요.
+- Caliterra(드론 77장) 재처리: 수평 맞음(DSM 높이폭 7.5m, 예전 105m), 정사영상 2.8cm/px, 축척 표준오차 4.09%.
 
 ## 지켜야 할 것
 - 상업 이용 가능 라이선스만(비상업: MASt3R, π³ 가중치, MILo, 2DGS, PGSR, VGGT 기본 가중치 등 사용 금지 — docs/GPU_PC.md).
