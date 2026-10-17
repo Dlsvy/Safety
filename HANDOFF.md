@@ -71,7 +71,13 @@ README.md 에 전체 설명·검증 결과가 있다. 먼저 README 를 읽어�
 - 가시(삐죽 솟은 선): COLMAP 경로 점군에 빈 공간 검사(visfilter.py) — CPU 에서는 재현 안 됨, PC 결과로 확인 필요.
 - Caliterra(드론 77장) 재처리: 수평 맞음(DSM 높이폭 7.5m, 예전 105m), 정사영상 2.8cm/px, 축척 표준오차 4.09%.
 
+## PGSR (2026-10-17, PC 에서 확인 필요)
+- 설치: `scripts/gpu/setup_pgsr_windows.ps1` → third_party/pgsr. 통합 탭(--pipeline fuse)에서 스플랫 학습이 끝난 뒤 순서대로 실행
+  (빠름 7000 / 최고 30000 스텝) → TSDF 메쉬를 포토그래메트리 메쉬와 합침(fuse.merge_meshes). report.json fuse.shape_mesh 로 어느 쪽이 쓰였는지 확인.
+- 클라우드 확인: 패치(pytorch3d 제거·깊이 단위) 문법·회전 함수 수치, 장면 값(건물 이웃거리 2.5m/복셀 8mm, Caliterra 24.9m/8.5cm).
+  실제 학습·메쉬는 GPU 가 없어 미검증 → 실패하면 work/pgsr/pgsr.log 확인.
+
 ## 지켜야 할 것
-- 상업 이용 가능 라이선스만(비상업: MASt3R, π³ 가중치, MILo, 2DGS, PGSR, VGGT 기본 가중치 등 사용 금지 — docs/GPU_PC.md).
+- 사용자는 비상업 용도 → 연구용 라이선스(PGSR 등)도 사용 가능(docs/GPU_PC.md). 상업 용도로 바뀌면 빼야 함.
 - 새 기법은 실사 벤치마크(eval_strecha.py)로 숫자 확인 후 채택(클라우드에서 sift_hq·refine_pp 는 효과 없어 옵션으로만 둠).
 - 무거운 작업(특징점·조밀복원·스플래팅)은 동시에 돌리지 말 것(클라우드에서 메모리 부족으로 두 번 중단됨).

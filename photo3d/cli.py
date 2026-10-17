@@ -311,7 +311,18 @@ def run(a) -> dict:
                     rep.setdefault("fuse", {})["agree"] = fi
                     # 최적 합성 메쉬: 포토그래메트리 + (그것이 없는 곳만) 스플랫에서 뽑은 메쉬 → 정형화 → 사진 텍스처
                     try:
-                        gm = splat.mesh_from_splat(side["splat"], work / "splat" / "gs_mesh", log=log)
+                        # 형태 메쉬: PGSR(평면 가우시안, 설치돼 있으면 — 가장 정확) → 없거나 실패하면 Spirula 메쉬
+                        from . import pgsr
+                        gm = None
+                        if pgsr.find_pgsr() is not None:
+                            gm = pgsr.run(work / "dense", work / "pgsr",
+                                          iterations=30000 if a.profile == "gpu-max" else 7000, log=log)
+                            if gm is not None:
+                                rep["fuse"]["shape_mesh"] = "pgsr"
+                        if gm is None:
+                            gm = splat.mesh_from_splat(side["splat"], work / "splat" / "gs_mesh", log=log)
+                            if gm is not None:
+                                rep["fuse"]["shape_mesh"] = "spirula"
                         if gm is not None:
                             dpl = Path(dense_pts) if dense_pts else None
                             mi = fuse.merge_meshes(fm, gm, dpl, work / "mvs" / "scene_mesh_best.ply", log=log)

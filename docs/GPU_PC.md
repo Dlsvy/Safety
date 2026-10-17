@@ -44,9 +44,10 @@ python -m photo3d run photos --features aliked --gpu --colmap-bin $env:COLMAP_BI
 ```
 반복무늬·저질감 현장에서 등록률 개선 기대. SIFT 대비 효과는 현장 데이터로 비교 후 기본값 결정.
 
-## 쓰지 않는 것 (비상업 라이선스)
-MASt3R/MASt3R-SfM, π³ 가중치, CUT3R, StreamVGGT, Fast3R, MVSAnywhere, MILo, 2DGS(Inria), GOF, RaDe-GS, PGSR,
-VGGT 기본 가중치(상업용은 신청제 VGGT-1B-Commercial 만).
+## 비상업 라이선스 (사용자 확인: 비상업 용도 → 사용 가능, 2026-10-17)
+- **PGSR(사용 중)**: 통합 탭의 형태 메쉬. `scripts/gpu/setup_pgsr_windows.ps1` 로 설치(CUDA 12.8 + VS Build Tools 필요).
+  설치돼 있으면 자동으로 쓰고, 없거나 실패하면 Spirula 메쉬로 대신한다(photo3d/pgsr.py).
+- 후보(아직 미연결): 2DGS, GOF, RaDe-GS, MILo, MASt3R/MASt3R-SfM, π³, VGGT 기본 가중치 — 상업 용도로 바뀌면 PGSR 포함 모두 빼야 함.
 
 ## 클라우드에서 가중치 쓰기 (필요할 때)
 클라우드는 Hugging Face·GitHub 릴리스·LFS 가 막혀 있다. 라이선스가 재배포를 허용하는(Apache/MIT) 가중치에 한해
