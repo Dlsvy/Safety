@@ -57,12 +57,62 @@ SAMPLE_INFO = {"fountain-P11": "분수대 벽면 11장", "Herz-Jesus-P8": "성�
                "ImageDataset_SceauxCastle": "성 외벽 11장", "sceaux": "성 외벽 11장"}
 
 
+# 현장 예시(건설현장·공장·대형 건물): 크기가 커서 하나씩 '받기'. 라이선스를 지켜 원 배포처에서 직접 받는다(재배포 안 함)
+SITE_SAMPLES = [
+    {"key": "caliterra", "title": "건설현장(택지 조성) 드론 77장", "kind": "git", "mb": 272,
+     "url": "https://github.com/OpenDroneMap/odm_data_caliterra.git",
+     "license": "CC0 — OpenDroneMap. 땅고르기·도로·콘크리트관 적치, 수직 촬영(GPS)"},
+    {"key": "pix4d_construction", "title": "건설현장 드론 197장(13ha)", "kind": "zip", "mb": 1700,
+     "url": "https://data.pix4d.com/misc/example_datasets/example_soda_bim.zip",
+     "license": "Pix4D 예시 데이터 — 교육·업무 훈련용, 상업·홍보에 쓰면 'Courtesy of Pix4D' 표기"},
+    {"key": "pix4d_industrial", "title": "산업 건물(공장) 드론 138장", "kind": "zip", "mb": 302,
+     "url": "https://data.pix4d.com/misc/example_datasets/example_bebop2_industrial_building.zip",
+     "license": "Pix4D 예시 데이터 — 교육·업무 훈련용, 상업·홍보에 쓰면 'Courtesy of Pix4D' 표기. 격자+선회(경사)"},
+    {"key": "pix4d_office", "title": "사무 건물 드론 선회 85장", "kind": "zip", "mb": 416,
+     "url": "https://data.pix4d.com/misc/example_datasets/dji_demo.zip",
+     "license": "Pix4D 예시 데이터 — 교육·업무 훈련용, 상업·홍보에 쓰면 'Courtesy of Pix4D' 표기. 스플래팅에 적합"},
+    {"key": "pix4d_building", "title": "건물 드론 선회 36장(빠른 시험)", "kind": "zip", "mb": 245,
+     "url": "https://data.pix4d.com/misc/example_datasets/example_building.zip",
+     "license": "Pix4D 예시 데이터 — 교육·업무 훈련용, 상업·홍보에 쓰면 'Courtesy of Pix4D' 표기"},
+    {"key": "eth3d_pipes", "title": "플랜트 배관(실내) 14장", "kind": "7z", "mb": 110,
+     "url": "https://www.eth3d.net/data/pipes_dslr_jpg.7z",
+     "license": "ETH3D CC BY-NC-SA 4.0 — 비상업 시험용만. 레이저 정답 있음(tools/eval_eth3d.py)"},
+    {"key": "eth3d_electro", "title": "전기 설비 현장 45장", "kind": "7z", "mb": 423,
+     "url": "https://www.eth3d.net/data/electro_dslr_jpg.7z",
+     "license": "ETH3D CC BY-NC-SA 4.0 — 비상업 시험용만. 레이저 정답 있음"},
+]
+IMG_EXT = {".jpg", ".jpeg", ".png"}
+
+
+def _image_dir(root: Path) -> tuple[Path | None, int]:
+    """압축을 푼 폴더 안에서 사진이 가장 많은 폴더"""
+    best, n = None, 0
+    for d in [root] + [q for q in root.rglob("*") if q.is_dir()]:
+        if ".git" in d.parts:
+            continue
+        c = sum(1 for q in d.iterdir() if q.suffix.lower() in IMG_EXT)
+        if c > n:
+            best, n = d, c
+    return best, n
+
+
 def list_samples() -> list[dict]:
     out = []
     data = ROOT / "data"
+    site_keys = {x["key"] for x in SITE_SAMPLES}
+    for x in SITE_SAMPLES:
+        d = data / x["key"]
+        if d.exists() and (d / ".done").exists():
+            img, n = _image_dir(d)
+            if img is not None and n >= 5:
+                out.append({"name": x["key"], "path": str(img), "count": n, "desc": x["title"], "license": x["license"], "site": True})
+                continue
+        out.append({"name": x["key"], "remote": True, "mb": x["mb"], "desc": x["title"], "license": x["license"], "site": True})
     if not data.exists():
         return out
     for d in sorted(data.glob("**/images")):
+        if any(k in d.parts for k in site_keys):
+            continue
         n = len([q for q in d.iterdir() if q.suffix.lower() in {".jpg", ".jpeg", ".png"}])
         if n >= 5:
             name = d.parent.name
@@ -71,6 +121,72 @@ def list_samples() -> list[dict]:
 
 
 _sample_dl = {"state": "idle", "msg": ""}
+_site_dl: dict = {}  # key → {"state", "msg"}
+
+
+def download_site_sample(key: str) -> None:
+    x = next(s for s in SITE_SAMPLES if s["key"] == key)
+    st = _site_dl[key] = {"state": "running", "msg": "받는 중…"}
+    dst = ROOT / "data" / key
+    try:
+        if dst.exists():
+            shutil.rmtree(dst)
+        dst.mkdir(parents=True)
+        if x["kind"] == "git":
+            r = subprocess.run(["git", "clone", "--depth", "1", x["url"], str(dst)], capture_output=True, text=True)
+            if r.returncode != 0:
+                raise RuntimeError(r.stderr.strip()[-200:])
+        else:
+            import urllib.request
+            arc = ROOT / "data" / f"_{key}.{x['kind']}"
+            arc.unlink(missing_ok=True)
+            total = 0
+            for attempt in range(8):  # 연결이 중간에 끊기면 받은 데부터 이어 받는다
+                got = arc.stat().st_size if arc.exists() else 0
+                if total and got >= total:
+                    break
+                try:
+                    req = urllib.request.Request(x["url"], headers={"Range": f"bytes={got}-"} if got else {})
+                    with urllib.request.urlopen(req, timeout=60) as resp, open(arc, "ab" if got else "wb") as f:
+                        if got and resp.status != 206:  # 이어받기 안 되는 서버 → 처음부터
+                            f.seek(0)
+                            f.truncate()
+                            got = 0
+                        total = total or got + int(resp.headers.get("Content-Length") or 0)
+                        while True:
+                            b = resp.read(1 << 20)
+                            if not b:
+                                break
+                            f.write(b)
+                            got += len(b)
+                            st["msg"] = f"받는 중 {got >> 20}/{total >> 20 or x['mb']} MB"
+                    if not total or got >= total:
+                        break
+                except Exception:
+                    if attempt == 7:
+                        raise
+                    st["msg"] = f"연결 끊김 → 이어 받기({attempt + 1})"
+                    time.sleep(2 * (attempt + 1))
+            st["msg"] = "압축 푸는 중…"
+            if x["kind"] == "zip":
+                import zipfile
+                with zipfile.ZipFile(arc) as z:
+                    z.extractall(dst)
+            else:
+                try:
+                    import py7zr
+                except ImportError:
+                    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "py7zr"], check=True)
+                    import py7zr
+                with py7zr.SevenZipFile(arc) as z:
+                    z.extractall(dst)
+            arc.unlink(missing_ok=True)
+        if _image_dir(dst)[1] < 5:
+            raise RuntimeError("사진을 찾지 못했습니다")
+        (dst / ".done").write_text("ok")
+        st.update(state="done", msg="준비됨")
+    except Exception as e:
+        st.update(state="failed", msg=f"받기 실패: {e}")
 
 
 def download_samples() -> None:
@@ -810,7 +926,7 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/sys":
                 return self._json(system_usage())
             if p == "/api/samples":
-                return self._json({"samples": list_samples(), "download": _sample_dl})
+                return self._json({"samples": list_samples(), "download": _sample_dl, "site": _site_dl})
             if p == "/api/jobs":
                 jobs = []
                 for jd in sorted(JOBS.iterdir(), reverse=True):
@@ -916,6 +1032,14 @@ class Handler(BaseHTTPRequestHandler):
                 cnt = len(direct(pp))
                 return self._json({"path": str(pp), "name": pp.name if pp.name.lower() not in ("images", "image", "photos") else pp.parent.name, "count": cnt})
             if p == "/api/samples/download":
+                key = self._body_json().get("key")
+                if key:  # 현장 예시 하나
+                    if not any(x["key"] == key for x in SITE_SAMPLES):
+                        return self._json({"error": "모르는 예시"}, 400)
+                    if _site_dl.get(key, {}).get("state") != "running":
+                        _site_dl[key] = {"state": "running", "msg": "받는 중…"}
+                        threading.Thread(target=download_site_sample, args=(key,), daemon=True).start()
+                    return self._json({"site": _site_dl})
                 if _sample_dl["state"] != "running":
                     threading.Thread(target=download_samples, daemon=True).start()
                     _sample_dl.update(state="running", msg="예시 사진 받는 중…")

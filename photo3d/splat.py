@@ -197,7 +197,8 @@ def start_splat_spirula(dense: Path, exe: str, steps: int = 30000, max_res: int 
              "--floater-suppression", "mild", "--train-resolution-divisor", str(div),
              "--output-dir-prefix", str(runs), "--output-dir-name", "run",
              "--steps-per-save", os.environ.get("PHOTO3D_SPIRULA_SAVE", "2000")] \
-        + (["--depth-supervision-weight", "0.05"] if depth_sup else [])  # 레이저 깊이가 있을 때만(위 주석)
+        + (["--depth-supervision-weight", "0.05"] if depth_sup else []) \
+        + (["--primitive", "mip"] if os.environ.get("PHOTO3D_SPLAT_MIP") == "1" else [])  # Mip-Splatting 안티앨리어싱(선택)  # 레이저 깊이가 있을 때만(위 주석)
     log(f"  $ spirula train --total-steps {steps} (표면 방향 지도 → 학습, 해상도 1/{div}, 최대 {int(cap):,}개, 백그라운드 GPU)")
     logf = open(work / "brush.log", "w", encoding="utf-8", errors="replace")  # 진행 표시가 같은 파일을 읽음
     steps_ = [geo, train]
@@ -221,7 +222,7 @@ def start_splat_spirula(dense: Path, exe: str, steps: int = 30000, max_res: int 
         log("  스플랫 학습에 측정 메쉬 표면 방향 지도" + (" + 깊이 지도" if (prior_dir / "depths").exists() else "") + " 사용")
     proc = _Chain(steps_, work, logf)
     return {"proc": proc, "logf": logf, "work": work, "exp": runs, "steps": steps, "engine": "spirula",
-            "subject": subject, "data": data}
+            "subject": subject, "data": data, "mip": os.environ.get("PHOTO3D_SPLAT_MIP") == "1"}
 
 
 def find_brush(root: Path, download: bool = True, log=print) -> str | None:
@@ -443,6 +444,7 @@ def finish_splat(h: dict, out: Path, log=print, max_wait: float | None = None) -
     except Exception as e:
         log(f"  가벼운 스플랫 내보내기 생략: {e}")
     return {"file": dst.name, "splats": n, "clean": clean, "light_mb": light, "ground": ground, "steps": int(plys[-1].stem.split("_")[-1]), "up_axis": "Z",
+            "antialiased": bool(h.get("mip")),  # 뷰어가 같은 방식(2D 필터 보정)으로 그리도록
             "note": "보기용. 메쉬 GLB(Y-up)와 맞추려면 X축 -90° 회전"}
 
 

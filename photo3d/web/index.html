@@ -51,6 +51,8 @@ button:focus-visible,.btn:focus-visible,input:focus-visible{outline:2px solid va
 .pick input{display:none}
 .samples{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:13px;color:var(--muted);margin:0 0 8px}
 .samples button{font-size:13px;font-weight:500;padding:6px 10px}
+.samples .srow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;width:100%}
+.samples button.remote{border-style:dashed}
 .samples button.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);color:var(--ink)}
 .chosen{font-size:13px;color:var(--muted);margin:4px 0 10px}
 .mode{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:0 0 10px}
@@ -385,28 +387,46 @@ let sampleSel = null;
 async function loadSamples() {
   const d = await api("/api/samples").catch(() => null); if (!d) return;
   const box = $("samples"); box.innerHTML = "";
-  const lab = document.createElement("span"); lab.textContent = "예시 사진:"; box.append(lab);
-  for (const sm of d.samples) {
-    const b = document.createElement("button"); b.type = "button";
-    b.textContent = `${sm.name} · ${sm.desc}`; b.classList.toggle("on", sampleSel === sm.path);
-    b.onclick = () => {
-      sampleSel = sampleSel === sm.path ? null : sm.path;
-      $("lpath").value = sampleSel || ""; if (sampleSel && !$("name").value) $("name").value = "예시 " + sm.name;
-      if (!sampleSel && $("name").value === "예시 " + sm.name) $("name").value = "";
-      $("chosen").textContent = sampleSel ? `예시 ${sm.name} (${sm.count}장) 선택 — 아래 버튼을 누르세요` : "선택한 파일 없음";
-      updateGo(); loadSamples();
-    };
-    box.append(b);
-  }
+  const site = d.samples.filter((x) => x.site), base = d.samples.filter((x) => !x.site);
+  let busy = false;
+  const row = (label, list) => {
+    const r = document.createElement("div"); r.className = "srow";
+    const lab = document.createElement("span"); lab.textContent = label; r.append(lab);
+    for (const sm of list) {
+      const b = document.createElement("button"); b.type = "button"; b.title = sm.license || "";
+      const dl = (d.site || {})[sm.name];
+      if (sm.remote) {   // 아직 안 받은 현장 예시: 누르면 원 배포처에서 받는다
+        if (dl && dl.state === "running") { b.textContent = `${sm.desc} · ${dl.msg}`; b.disabled = true; busy = true; }
+        else { b.textContent = `${sm.desc} · 받기 ${sm.mb >= 1000 ? (sm.mb / 1000).toFixed(1) + "GB" : sm.mb + "MB"}${dl && dl.state === "failed" ? " (" + dl.msg + ")" : ""}`;
+          b.className = "remote";
+          b.onclick = async () => { if (!confirm(`${sm.desc}\n${sm.license}\n\n약 ${sm.mb}MB 를 받을까요?`)) return;
+            await api("/api/samples/download", {method: "POST", body: JSON.stringify({key: sm.name})}); loadSamples(); }; }
+      } else {
+        b.textContent = sm.site ? `${sm.desc}` : `${sm.name} · ${sm.desc}`; b.classList.toggle("on", sampleSel === sm.path);
+        b.onclick = () => {
+          sampleSel = sampleSel === sm.path ? null : sm.path;
+          $("lpath").value = sampleSel || ""; if (sampleSel && !$("name").value) $("name").value = "예시 " + sm.name;
+          if (!sampleSel && $("name").value === "예시 " + sm.name) $("name").value = "";
+          $("chosen").textContent = sampleSel ? `예시 ${sm.desc} (${sm.count}장) 선택 — 아래 버튼을 누르세요${sm.license ? " · " + sm.license : ""}` : "선택한 파일 없음";
+          updateGo(); loadSamples();
+        };
+      }
+      r.append(b);
+    }
+    return r;
+  };
+  if (site.length) box.append(row("현장 예시:", site));
+  const r2 = row("기본 예시:", base); box.append(r2);
   const st = d.download.state;
-  if (st === "running") { const s2 = document.createElement("span"); s2.textContent = d.download.msg; box.append(s2); setTimeout(loadSamples, 3000); }
-  else if (d.samples.length < 7) {
+  if (st === "running") { const s2 = document.createElement("span"); s2.textContent = d.download.msg; r2.append(s2); busy = true; }
+  else if (base.length < 7) {
     const b = document.createElement("button"); b.type = "button";
-    b.textContent = d.samples.length ? "예시 더 받기" : "예시 사진 받기";
+    b.textContent = base.length ? "예시 더 받기" : "예시 사진 받기";
     b.onclick = async () => { await api("/api/samples/download", {method: "POST"}); loadSamples(); };
-    box.append(b);
-    if (st === "failed") { const s2 = document.createElement("span"); s2.textContent = d.download.msg; box.append(s2); }
+    r2.append(b);
+    if (st === "failed") { const s2 = document.createElement("span"); s2.textContent = d.download.msg; r2.append(s2); }
   }
+  if (busy) setTimeout(loadSamples, 3000);
 }
 loadSamples();
 
@@ -746,8 +766,9 @@ async function openViewer(j) {
   useFill = !!j.has_filled; showEst = false; useSplat = !!j.has_splat;
   // 통합 결과는 겹쳐 보기로 연다(실사 + 메쉬로 구멍 메움)
   useOvl = !!(j.has_splat && j.has_model && j.kind === "fuse"); if (useOvl) { useSplat = false; useFill = false; }
-  $("ovlb").hidden = !(j.has_splat && j.has_model); ovlPush = 0;
-  if ($("ovlb").hidden === false) api(`/files/${j.id}/report.json`).then((r) => { ovlPush = (r.fuse && r.fuse.agree && r.fuse.agree.tau_m) || 0; }).catch(() => {});
+  $("ovlb").hidden = !(j.has_splat && j.has_model); ovlPush = 0; splatMeta = null;
+  if (j.has_splat) await api(`/files/${j.id}/report.json`).then((r) => {
+    ovlPush = (r.fuse && r.fuse.agree && r.fuse.agree.tau_m) || 0; splatMeta = r.splat || null; }).catch(() => {});
   $("fillb").hidden = !j.has_filled; $("estb").hidden = !j.has_est; $("splatb").hidden = !j.has_splat;
   $("ssedit").hidden = !j.has_splat; $("dlspz").hidden = !j.has_splat;
   $("dlspz").href = `/files/${j.id}/site_splat.spz?dl=${encodeURIComponent(j.name + ".spz")}`;
@@ -764,7 +785,7 @@ async function openViewer(j) {
   await loadPick(j);
   syncToggles(); await loadModel(true); loadAnn();
 }
-let useFill = false, showEst = false, estModel = null, useSplat = false, splatView = null, useOvl = false, ovlPush = 0;
+let useFill = false, showEst = false, estModel = null, useSplat = false, splatView = null, useOvl = false, ovlPush = 0, splatMeta = null;
 function syncToggles(){
   $("splatb").classList.toggle("on", useSplat); $("splatb").setAttribute("aria-pressed", useSplat);
   $("ovlb").classList.toggle("on", useOvl); $("ovlb").setAttribute("aria-pressed", useOvl);
@@ -786,8 +807,12 @@ async function loadSplat(frame, keep = false) {
   $("vinfo").textContent = "실사(가우시안 스플래팅) 불러오는 중… 큰 파일은 수십 초 걸립니다";
   try {
     const GS = await import("gsplat3d");
+    // 보는 방향에 따라 바뀌는 색(구면조화 SH: 유리·금속 반사·광택)을 2차까지 살린다 — 예전엔 0차(방향 무관 색)만 그려
+    // 학습한 반사·광택을 버리고 있었다. 아주 큰 스플랫(400만↑)은 메모리 때문에 1차. 안티앨리어싱은 그렇게 학습했을 때만
+    const nsp = (splatMeta && splatMeta.splats) || 0;
     splatView = new GS.DropInViewer({sharedMemoryForWorkers: false, gpuAcceleratedSort: false, dynamicScene: false,
-      sceneRevealMode: GS.SceneRevealMode.Instant});   // 가운데부터 서서히 나타나는 효과 끔(느린 PC·비교 보기에서 일부만 보임)
+      sceneRevealMode: GS.SceneRevealMode.Instant, sphericalHarmonicsDegree: nsp > 4e6 ? 1 : 2,
+      antialiased: !!(splatMeta && splatMeta.antialiased)});   // 가운데부터 서서히 나타나는 효과 끔(느린 PC·비교 보기에서 일부만 보임)
     // 스플랫은 Z-up(측량 좌표), 메쉬 GLB 는 Y-up → X축 -90° 회전으로 맞춘다
     await splatView.addSplatScene(`/files/${curJob.id}/site_splat.ply`,
       {rotation: [-Math.SQRT1_2, 0, 0, Math.SQRT1_2], showLoadingUI: false, splatAlphaRemovalThreshold: 5,

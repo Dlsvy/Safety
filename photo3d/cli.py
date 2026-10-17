@@ -427,6 +427,8 @@ def main(argv=None):
                    default=os.environ.get("PHOTO3D_SPLAT_ENGINE", "auto"),
                    help="스플랫 학습 프로그램: auto(Spirula 가 있으면 Spirula, 없으면 Brush)")
     r.add_argument("--splat-res", type=int, default=1920, help="스플래팅 학습 이미지 최대 변 길이(px)")
+    r.add_argument("--splat-aa", action="store_true",
+                   help="Mip-Splatting 안티앨리어싱으로 학습(확대·축소 때 반짝임·계단 줄임, Spirula). 웹 뷰어도 같은 방식으로 그림")
     r.add_argument("--pipeline", choices=["splat", "pg", "fuse"], default="splat",
                    help="splat: 메쉬 + 가우시안 스플래팅(실사 보기) / pg: 포토그래메트리 전용(측정용 메쉬·정사영상·DSM·점군, 스플랫 없음) / fuse: 통합 — 포토그래메트리 + 그 메쉬로 맞춘 스플랫")
     r.add_argument("--masks", help="마스크 폴더(<이미지명>.png, 검정=제외) — 움직이는 사람·장비 제거")
@@ -483,6 +485,8 @@ def main(argv=None):
             a.fill = True
             if a.max_side == 1600:
                 a.max_side = 2400
+    if a.cmd == "run" and a.splat_aa:
+        os.environ["PHOTO3D_SPLAT_MIP"] = "1"
     if a.cmd == "run" and a.splat_steps < 0:
         a.splat_steps = {"fast": 7000, "gpu-max": 30000}.get(a.profile, 0)
     if a.cmd == "run" and not a.inputs and not a.from_colmap:
