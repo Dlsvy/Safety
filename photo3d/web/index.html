@@ -66,8 +66,9 @@ button:focus-visible,.btn:focus-visible,input:focus-visible{outline:2px solid va
 .tabs button small{display:block;font-weight:400;font-size:12px;color:var(--muted)}
 .pginfo{font-size:13px;color:var(--muted);border-left:3px solid var(--accent);padding:6px 10px;margin:0 0 10px;background:var(--bg);border-radius:0 8px 8px 0}
 .pginfo b{color:var(--ink)}
-[data-kind=pg] .only-splat{display:none}
-[data-kind=splat] .only-pg{display:none}
+[data-kind=pg] .only-splat,[data-kind=pg] .only-fuse{display:none}
+[data-kind=splat] .only-pg,[data-kind=splat] .only-fuse{display:none}
+[data-kind=fuse] .only-splat:not(.fuse-too),[data-kind=fuse] .only-pg:not(.fuse-too){display:none}
 .kind{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:0 8px}
 .kind.pg{border-color:var(--accent)}
 .guide ol{margin:8px 0 4px;padding-left:20px;display:grid;gap:4px;color:var(--ink);line-height:1.5}
@@ -137,6 +138,12 @@ details input{margin-top:6px;width:100%}
 @media (max-width:560px){.job{grid-template-columns:64px 1fr}.job img,.job .ph{width:64px;height:48px}.acts{grid-column:1/-1;justify-content:flex-start}}
 /* 뷰어 */
 #viewer{position:fixed;inset:0;background:#101214;display:none;z-index:10}
+#cv2{position:absolute;top:0;left:50%}
+#viewer.cmp #cv{width:50% !important}
+.cmplab{position:absolute;left:0;right:0;bottom:48px;display:flex;pointer-events:none}
+.cmplab span{flex:1;text-align:center;color:#eceae4;font-size:13px;text-shadow:0 1px 3px #000}
+.cmplab[hidden]{display:none}
+#viewer.cmp::after{content:"";position:absolute;top:0;bottom:0;left:50%;width:2px;background:#3a3f45;pointer-events:none}
 #viewer.on{display:block}
 #cv{width:100%;height:100%;display:block;touch-action:none}
 .vbar{position:absolute;left:0;right:0;top:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;
@@ -187,8 +194,14 @@ details input{margin-top:6px;width:100%}
     <div class="tabs" role="tablist" aria-label="만드는 방식">
       <button role="tab" id="tab-splat" aria-selected="true" data-kind="splat">가우시안 스플래팅<small>실사처럼 보기 · 메쉬 + 실사</small></button>
       <button role="tab" id="tab-pg" aria-selected="false" data-kind="pg">포토그래메트리<small>측정·도면용 3D · 정사영상·DSM·점군</small></button>
+      <button role="tab" id="tab-fuse" aria-selected="false" data-kind="fuse">통합<small>측정 메쉬 + 실사 · 겹쳐 보기</small></button>
     </div>
-    <h2 id="newh">새 3D 만들기 <span class="only-pg">— 포토그래메트리</span></h2>
+    <h2 id="newh">새 3D 만들기 <span class="only-pg">— 포토그래메트리</span><span class="only-fuse">— 통합</span></h2>
+    <div class="pginfo only-fuse">같은 사진으로 <b>포토그래메트리(측정용 메쉬)</b>와 <b>가우시안 스플래팅(실사)</b>을 함께 만들고 서로 맞춥니다.
+      ① 측정 메쉬를 사진마다 그려 만든 표면 방향 지도로 스플랫을 학습(사진 한 장 추정 대신 여러 사진으로 잰 표면)
+      ② 측정 표면 뒤에 숨은 스플랫(벽 속·바닥 밑 잡티) 제거 ③ 둘의 차이(mm)를 품질 보고서에 표시.
+      뷰어에서 <b>겹쳐 보기</b>(실사 + 메쉬로 구멍 메움, 거리 재기는 메쉬 기준)와 <b>나란히 비교</b>를 씁니다.
+      포토그래메트리 결과물(정사영상·DSM·점군 LAS)도 모두 나옵니다. 시간은 두 방식을 합친 만큼 걸립니다.</div>
     <div class="pginfo only-pg">사진으로 <b>치수를 잴 수 있는 3D</b>를 만듭니다(스플랫 없이 GPU 를 측정에 전부 사용).
       결과: 텍스처 메쉬(유니티 GLB·라이노 OBJ), <b>정사영상</b>(위에서 본 현장 사진, 1px 크기 일정),
       <b>DSM</b>(높이 지도), <b>점군 LAS</b>(CloudCompare·Civil3D·Revit), 바닥·벽 평면 정리.
@@ -206,8 +219,8 @@ details input{margin-top:6px;width:100%}
     <div class="samples" id="samples"></div>
     <div class="chosen" id="chosen">선택한 파일 없음 · 한쪽 면은 5~6장, 한 바퀴는 15~20장, 또는 1~2분 영상(천천히 걷기) · 360 카메라: 펼친 영상·사진(2:1) 또는 Insta360 원본(.insv·.insp)도 됩니다</div>
     <div class="mode" role="radiogroup" aria-label="품질">
-      <label><input type="radio" name="mode" value="fast" checked><span><strong>빠르게</strong><span class="only-splat">약 5~10분 · 프로토타입(해상도 낮춤·구멍 메우기 생략)</span><span class="only-pg">약 10~15분 · 현장 검토용(2400px)</span></span></label>
-      <label><input type="radio" name="mode" value="best"><span><strong><span class="only-splat">최고 품질</span><span class="only-pg">정밀 측정</span></strong><span class="only-splat">GPU 최대 · 15~30분</span><span class="only-pg">원본 해상도 · GPU 최대 · 20~40분</span></span></label>
+      <label><input type="radio" name="mode" value="fast" checked><span><strong>빠르게</strong><span class="only-splat">약 5~10분 · 프로토타입(해상도 낮춤·구멍 메우기 생략)</span><span class="only-pg">약 10~15분 · 현장 검토용(2400px)</span><span class="only-fuse">약 15~25분 · 2400px</span></span></label>
+      <label><input type="radio" name="mode" value="best"><span><strong><span class="only-splat">최고 품질</span><span class="only-pg">정밀 측정</span><span class="only-fuse">최고 품질</span></strong><span class="only-splat">GPU 최대 · 15~30분</span><span class="only-pg">원본 해상도 · GPU 최대 · 20~40분</span><span class="only-fuse">원본 해상도 · GPU 최대 · 40~70분</span></span></label>
     </div>
     <label class="subj only-splat"><input type="checkbox" id="subject"> <strong>사람·물체 모드</strong> — 사람·장비·조형물처럼 가운데 대상 하나를 둘러 찍었을 때: 배경을 자동으로 빼고 대상만 선명하게(실사 보기)</label>
     <details class="guide"><summary>촬영 가이드 (현장 안전관리자용)</summary>
@@ -223,7 +236,7 @@ details input{margin-top:6px;width:100%}
         <li>층·구역마다 따로 찍고, 시작점·끝점(입구 모서리)을 정해 두세요.</li>
         <li>공정 기록용 사진은 바닥에 표시한 같은 지점에서 같은 방향으로 찍으면 날짜별 비교가 쉽습니다.</li>
       </ol>
-      <div class="only-pg">
+      <div class="only-pg fuse-too">
       <p class="n"><b>드론(포토그래메트리)</b></p>
       <ol>
         <li>자동 비행 앱으로 <b>격자 비행</b>: 앞뒤 겹침 80%, 옆 겹침 70%, 카메라 수직(-90°). 높이는 원하는 해상도에 맞춰(대략 40m ≈ 1cm/px).</li>
@@ -274,9 +287,13 @@ details input{margin-top:6px;width:100%}
 
 <div id="viewer" role="dialog" aria-label="3D 뷰어">
   <canvas id="cv"></canvas>
+  <canvas id="cv2" hidden></canvas>
+  <div class="cmplab" id="cmplab" hidden><span>실사 · 가우시안 스플래팅</span><span>포토그래메트리 메쉬</span></div>
   <div class="vbar">
     <span class="t" id="vt"></span>
     <button id="splatb" aria-pressed="false" hidden>실사 보기</button>
+    <button id="ovlb" aria-pressed="false" hidden title="실사(스플랫) 뒤에 측정 메쉬를 깔아 구멍을 메움 — 거리 재기·표시는 메쉬 기준">겹쳐 보기</button>
+    <button id="cmpb" aria-pressed="false" hidden title="왼쪽 실사(스플래팅)·오른쪽 메쉬(포토그래메트리)를 나란히 — 한쪽을 돌리면 같이 돕니다">나란히 비교</button>
     <a class="btn" id="dlspz" hidden download title="실사(스플랫) 압축본 — SuperSplat·Postshot 등에서 열림, 원본의 약 1/10">실사 .spz</a>
     <a class="btn" id="dlsortho" hidden target="_blank" title="정사영상: 텍스처 메쉬를 위에서 수직으로 본 현장 사진(1px 크기 일정, 월드파일 .jgw 포함)">정사영상</a>
     <a class="btn" id="dldsm" hidden target="_blank" title="DSM 높이 지도(색=높이). 실제 높이 값은 site_dsm.tif(m)">높이 지도</a>
@@ -322,10 +339,10 @@ const STATUS = {uploading:"올리는 중", queued:"대기", running:"처리 중"
 let picked = [];
 let curKind = "splat";
 function setKind(k) {
-  curKind = k === "pg" ? "pg" : "splat";
+  curKind = k === "pg" || k === "fuse" ? k : "splat";
   $("newp").dataset.kind = curKind;
   for (const b of document.querySelectorAll(".tabs [role=tab]")) b.setAttribute("aria-selected", b.dataset.kind === curKind);
-  $("go").textContent = curKind === "pg" ? "포토그래메트리 3D 만들기" : "3D 만들기";
+  $("go").textContent = {pg: "포토그래메트리 3D 만들기", fuse: "통합 3D 만들기"}[curKind] || "3D 만들기";
   try { localStorage.setItem("kind", curKind); } catch (e) {}
 }
 for (const b of document.querySelectorAll(".tabs [role=tab]")) b.onclick = () => setKind(b.dataset.kind);
@@ -438,7 +455,7 @@ function card(j) {
   el.innerHTML = `${thumb}
     <div><div class="name"></div>
       <div class="meta"><span class="pill s-${j.status}">${STATUS[j.status] || j.status}</span>
-        <span class="kind ${j.kind === "pg" ? "pg" : ""}">${j.kind === "pg" ? "포토그래메트리" : "스플래팅"}</span>
+        <span class="kind ${j.kind === "pg" || j.kind === "fuse" ? "pg" : ""}">${{pg: "포토그래메트리", fuse: "통합"}[j.kind] || "스플래팅"}</span>
         ${j.stage && j.status === "running" ? `<span>${j.stage}</span>` : ""}
         ${j.registered ? `<span>사진 <span class="num">${j.registered}</span> 연결</span>` : ""}
         ${j.camera ? `<span title="촬영 기종(사진 EXIF·영상 정보에서 자동 인식)">📷 ${esc(j.camera)}</span>` : ""}
@@ -674,9 +691,48 @@ async function initViewer() {
   controls = new OrbitControls(camera, cv); controls.enableDamping = true;
   marks = new THREE.Group(); scene.add(marks); ray = new THREE.Raycaster();
   addEventListener("resize", resize);
-  (function loop(){ if ($("viewer").classList.contains("on")) { controls.update(); renderer.render(scene, camera); } requestAnimationFrame(loop); })();
+  (function loop(){ if ($("viewer").classList.contains("on")) { if (flyAnim) flyAnim(); controls.update();
+    if (pivotMark) for (const m of [pivotMark, pickMark]) m.scale.setScalar(Math.max(1e-4, camera.position.distanceTo(m.position) / 120));
+    renderer.render(scene, camera); if (cmpOn) renderCmp(); } requestAnimationFrame(loop); })();
 }
-function resize(){ const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }
+function resize(){
+  const w = cmpOn ? Math.floor(innerWidth / 2) : innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false); cv.style.width = w + "px"; cv.style.height = h + "px";
+  if (renderer2) { renderer2.setSize(w, h, false); cv2.style.width = w + "px"; cv2.style.height = h + "px"; }
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+/* 나란히 비교: 같은 카메라를 두 화면이 함께 쓴다 → 어느 쪽을 돌려도 같이 돈다 */
+const cv2 = $("cv2");
+let cmpOn = false, renderer2 = null, scene2 = null, controls2 = null, cmpModel = null, piv2 = null, pick2 = null;
+async function setCompare(on) {
+  cmpOn = on; $("viewer").classList.toggle("cmp", on); cv2.hidden = !on; $("cmplab").hidden = !on;
+  $("cmpb").classList.toggle("on", on); $("cmpb").setAttribute("aria-pressed", on);
+  if (!renderer) return;
+  if (on) {
+    if (!renderer2) {
+      renderer2 = new THREE.WebGLRenderer({canvas: cv2, antialias: true}); renderer2.setPixelRatio(Math.min(devicePixelRatio, 2));
+      scene2 = new THREE.Scene(); scene2.background = new THREE.Color(0x101214);
+      controls2 = new OrbitControls(camera, cv2); controls2.enableDamping = true; controls2.target = controls.target;
+      piv2 = pivDot(0x4fc3f7); pick2 = pivDot(0xf2b705); scene2.add(piv2, pick2);
+      let down2 = null;
+      cv2.addEventListener("pointerdown", (e) => { down2 = [e.clientX, e.clientY]; });
+      cv2.addEventListener("pointerup", (e) => { if (!down2 || Math.hypot(e.clientX - down2[0], e.clientY - down2[1]) > 6) return;
+        const p = pickAt(e, cv2, camera); if (p) { markPick(p); $("vinfo").textContent = "F: 이 지점으로 확대 · 더블클릭: 회전 중심 · R: 처음 보기"; } });
+      cv2.addEventListener("dblclick", (e) => { const p = pickAt(e, cv2, camera); if (p) { markPick(p); setPivot(p); } });
+    }
+    if (cmpModel) { scene2.remove(cmpModel); cmpModel = null; }
+    const j = curJob, file = j.has_light ? "site_model_light.glb" : "site_model.glb";
+    new GLTFLoader().load(`/files/${j.id}/${file}`, (g) => { cmpModel = g.scene; basic(cmpModel); scene2.add(cmpModel); });
+    if (!useSplat || useOvl) { useOvl = false; useSplat = true; syncToggles(); loadModel(false); }
+    $("vinfo").textContent = "왼쪽 실사 · 오른쪽 메쉬 — 한쪽을 돌리면 같이 돕니다 · 더블클릭: 회전 중심 · 클릭 후 F: 확대";
+  } else if (cmpModel) { scene2.remove(cmpModel); cmpModel = null; }
+  resize();
+}
+function renderCmp() {
+  controls2.update();
+  for (const [a, b] of [[pivotMark, piv2], [pickMark, pick2]]) if (a) { b.position.copy(a.position); b.visible = a.visible; b.scale.copy(a.scale); }
+  renderer2.render(scene2, camera);
+}
 
 async function openViewer(j) {
   curJob = j; $("viewer").classList.add("on");
@@ -688,6 +744,10 @@ async function openViewer(j) {
   $("dl").setAttribute("download", `${j.name}.glb`);
   $("openf").onclick = () => api(`/api/jobs/${j.id}/open`, {method: "POST"}).catch((e) => alert(e.message));
   useFill = !!j.has_filled; showEst = false; useSplat = !!j.has_splat;
+  // 통합 결과는 겹쳐 보기로 연다(실사 + 메쉬로 구멍 메움)
+  useOvl = !!(j.has_splat && j.has_model && j.kind === "fuse"); if (useOvl) { useSplat = false; useFill = false; }
+  $("ovlb").hidden = !(j.has_splat && j.has_model); ovlPush = 0;
+  if ($("ovlb").hidden === false) api(`/files/${j.id}/report.json`).then((r) => { ovlPush = (r.fuse && r.fuse.agree && r.fuse.agree.tau_m) || 0; }).catch(() => {});
   $("fillb").hidden = !j.has_filled; $("estb").hidden = !j.has_est; $("splatb").hidden = !j.has_splat;
   $("ssedit").hidden = !j.has_splat; $("dlspz").hidden = !j.has_splat;
   $("dlspz").href = `/files/${j.id}/site_splat.spz?dl=${encodeURIComponent(j.name + ".spz")}`;
@@ -699,12 +759,16 @@ async function openViewer(j) {
   $("camsb").hidden = !j.has_cams; camsOn = false; camData = null; $("camsb").classList.remove("on"); $("aphoto").hidden = true;
   if (camG) camG.clear();
   setTool(null); showPanel(false); $("asave").textContent = "";
+  lastPick = null; if (pickMark) pickMark.visible = false;
+  setCompare(false); $("cmpb").hidden = !(j.has_splat && j.has_model);
+  await loadPick(j);
   syncToggles(); await loadModel(true); loadAnn();
 }
-let useFill = false, showEst = false, estModel = null, useSplat = false, splatView = null;
+let useFill = false, showEst = false, estModel = null, useSplat = false, splatView = null, useOvl = false, ovlPush = 0;
 function syncToggles(){
   $("splatb").classList.toggle("on", useSplat); $("splatb").setAttribute("aria-pressed", useSplat);
-  $("fillb").disabled = useSplat; document.querySelectorAll("[data-tool]").forEach((b) => b.disabled = useSplat);
+  $("ovlb").classList.toggle("on", useOvl); $("ovlb").setAttribute("aria-pressed", useOvl);
+  $("fillb").disabled = useSplat || useOvl; document.querySelectorAll("[data-tool]").forEach((b) => b.disabled = useSplat && !useOvl);
   $("fillb").classList.toggle("on", useFill); $("fillb").setAttribute("aria-pressed", useFill);
   $("estb").classList.toggle("on", showEst); $("estb").setAttribute("aria-pressed", showEst);
   $("estb").disabled = !useFill || useSplat;
@@ -717,28 +781,86 @@ async function clearScene() {
   if (splatView) { scene.remove(splatView); try { await splatView.dispose(); } catch (e) {} splatView = null; }
   clearMarks();
 }
-async function loadSplat(frame) {
-  await clearScene();
+async function loadSplat(frame, keep = false) {
+  if (!keep) await clearScene();
   $("vinfo").textContent = "실사(가우시안 스플래팅) 불러오는 중… 큰 파일은 수십 초 걸립니다";
   try {
     const GS = await import("gsplat3d");
-    splatView = new GS.DropInViewer({sharedMemoryForWorkers: false, gpuAcceleratedSort: false, dynamicScene: false});
+    splatView = new GS.DropInViewer({sharedMemoryForWorkers: false, gpuAcceleratedSort: false, dynamicScene: false,
+      sceneRevealMode: GS.SceneRevealMode.Instant});   // 가운데부터 서서히 나타나는 효과 끔(느린 PC·비교 보기에서 일부만 보임)
     // 스플랫은 Z-up(측량 좌표), 메쉬 GLB 는 Y-up → X축 -90° 회전으로 맞춘다
     await splatView.addSplatScene(`/files/${curJob.id}/site_splat.ply`,
       {rotation: [-Math.SQRT1_2, 0, 0, Math.SQRT1_2], showLoadingUI: false, splatAlphaRemovalThreshold: 5,
        format: GS.SceneFormat.Ply});
     scene.add(splatView);
     if (frame) await frameFrom("site_model.glb");
-    $("vinfo").textContent = "실사 보기(가우시안 스플래팅) · 거리 재기는 '실사 보기'를 끄고 메쉬에서";
-  } catch (e) { console.error(e); $("vinfo").textContent = "실사 파일을 불러오지 못했습니다 → 메쉬로 봅니다"; useSplat = false; syncToggles(); loadModel(frame); }
+    $("vinfo").textContent = keep ? "겹쳐 보기: 실사 + 측정 메쉬(실사가 빈 곳) · 거리 재기·표시는 메쉬 기준 · 더블클릭: 회전 중심"
+      : "실사 보기(가우시안 스플래팅) · 거리 재기는 '겹쳐 보기'나 메쉬에서 · 더블클릭: 회전 중심";
+  } catch (e) { console.error(e); $("vinfo").textContent = "실사 파일을 불러오지 못했습니다 → 메쉬로 봅니다"; useSplat = false; useOvl = false; syncToggles(); if (!keep) loadModel(frame); }
 }
 function frameFrom(file) {   // 카메라 위치는 메쉬 범위로 잡는다
   return new Promise((res) => new GLTFLoader().load(`/files/${curJob.id}/${file}`, (g) => { frameBox(new THREE.Box3().setFromObject(g.scene)); res(); }, undefined, () => res()));
 }
 function frameBox(box) {
+  // 떨어져 나간 조각·잡티 때문에 상자 중심이 현장 밖으로 밀리지 않게, 충돌 메쉬 점의 2~98% 범위로 잡는다
+  if (pickMesh) box = robustBox(pickMesh) || box;
   const c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3()).length();
   controls.target.copy(c); camera.position.copy(c).add(new THREE.Vector3(0, s * 0.25, s * 0.75));
   camera.near = s / 1000; camera.far = s * 20; camera.updateProjectionMatrix();
+  homeView = {t: c.clone(), p: camera.position.clone()}; viewSize = s; showPivot(c, false);
+}
+function robustBox(root) {
+  const xs = [], ys = [], zs = [], v = new THREE.Vector3();
+  root.updateMatrixWorld(true);
+  root.traverse((o) => { if (!o.isMesh) return; const a = o.geometry.attributes.position, st = Math.max(1, Math.floor(a.count / 20000));
+    for (let i = 0; i < a.count; i += st) { v.fromBufferAttribute(a, i).applyMatrix4(o.matrixWorld); xs.push(v.x); ys.push(v.y); zs.push(v.z); } });
+  if (xs.length < 10) return null;
+  const q = (arr, f) => { arr.sort((a, b) => a - b); return arr[Math.floor(f * (arr.length - 1))]; };
+  return new THREE.Box3(new THREE.Vector3(q(xs, 0.02), q(ys, 0.02), q(zs, 0.02)), new THREE.Vector3(q(xs, 0.98), q(ys, 0.98), q(zs, 0.98)));
+}
+/* 회전 중심·확대: 더블클릭 = 그 지점을 회전 중심으로, 클릭 후 F = 그 지점으로 확대, R = 처음 보기.
+   지점 찾기는 언제나 충돌 메쉬(가벼움, 스플랫과 같은 좌표)로 → 메쉬·실사·비교 보기에서 똑같이 동작 */
+let pickMesh = null, pivotMark = null, pickMark = null, lastPick = null, homeView = null, viewSize = 10, flyAnim = null;
+function loadPick(j) {
+  pickMesh = null;
+  return new Promise((res) => new GLTFLoader().load(`/files/${j.id}/site_collider.glb`, (g) => {
+    pickMesh = g.scene; pickMesh.visible = false; pickMesh.updateMatrixWorld(true); res(); }, undefined, () => res()));
+}
+function pickAt(e, el, cam) {
+  const r = el.getBoundingClientRect();
+  ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), cam);
+  const tgt = pickMesh || model; if (!tgt) return null;
+  const h = ray.intersectObject(tgt, true)[0];
+  return h ? h.point.clone() : null;
+}
+function pivDot(color) {
+  const m = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({color, depthTest: false, transparent: true, opacity: 0.9}));
+  m.renderOrder = 999; m.visible = false; return m;
+}
+function showPivot(p, on = true) {
+  if (!pivotMark) { pivotMark = pivDot(0x4fc3f7); pickMark = pivDot(0xf2b705); }
+  scene.add(pivotMark);
+  pivotMark.position.copy(p); pivotMark.visible = on;
+  if (on) { clearTimeout(showPivot.t); showPivot.t = setTimeout(() => { pivotMark.visible = false; }, 1500); }
+}
+function markPick(p) {
+  if (!pickMark) { pivotMark = pivDot(0x4fc3f7); pickMark = pivDot(0xf2b705); }
+  scene.add(pickMark); pickMark.position.copy(p); pickMark.visible = true; lastPick = p;
+}
+function setPivot(p) {   // 카메라는 그대로, 도는 중심만 바꾼다
+  controls.target.copy(p); showPivot(p);
+  $("vinfo").textContent = "회전 중심을 이 지점으로 바꿨습니다 · 클릭 후 F: 확대 · R: 처음 보기";
+}
+function flyTo(t1, p1, ms = 450) {
+  const t0 = controls.target.clone(), p0 = camera.position.clone(), s = performance.now();
+  flyAnim = () => { const k = Math.min(1, (performance.now() - s) / ms), e = k * k * (3 - 2 * k);
+    controls.target.lerpVectors(t0, t1, e); camera.position.lerpVectors(p0, p1, e); if (k >= 1) flyAnim = null; };
+}
+function focusOn(p) {    // 지점을 회전 중심으로 하고 지금 거리의 1/3 로 다가간다(너무 가까워지지 않게 하한)
+  const d = camera.position.distanceTo(p), nd = Math.max(d / 3, viewSize / 200);
+  const dir = camera.position.clone().sub(p).normalize();
+  flyTo(p.clone(), p.clone().add(dir.multiplyScalar(nd))); showPivot(p);
+  $("vinfo").textContent = "확대 · 더블클릭: 회전 중심 · F: 더 확대 · R: 처음 보기";
 }
 async function loadModel(frame) {
   if (useSplat) return loadSplat(frame);
@@ -747,13 +869,24 @@ async function loadModel(frame) {
   $("vinfo").textContent = "불러오는 중…";
   await clearScene();
   await new Promise((res) => new GLTFLoader().load(`/files/${j.id}/${file}`, (g) => {
-    model = g.scene; basic(model); scene.add(model); res();
+    model = g.scene; basic(model); if (useOvl) pushBack(model); scene.add(model); res();
     if (frame) frameBox(new THREE.Box3().setFromObject(model));
     $("vinfo").textContent = useFill ? "구멍을 주변 형상으로 메운 모델 · '메운 곳 표시'로 측정 안 된 부분 확인"
                                      : "끌어서 돌리기 · 휠/두 손가락으로 확대 · 오른쪽 끌기로 이동";
     if (useFill && showEst) loadEst();
     if (annG) renderAnn();
   }, undefined, () => { $("vinfo").textContent = "3D 파일을 불러오지 못했습니다."; res(); }));
+  if (useOvl) await loadSplat(false, true);
+}
+/* 겹쳐 보기: 메쉬를 카메라에서 조금(측정 허용오차만큼) 뒤로 밀어 그린다 → 같은 표면에선 스플랫이 앞에 보이고,
+   스플랫이 빈 곳(구멍)만 메쉬가 보인다. 실제 형상은 그대로라 거리 재기·표시는 정확한 메쉬 좌표 */
+function pushBack(root) {
+  const push = { value: Math.max(ovlPush * 1.5, viewSize / 3000) };
+  root.traverse((o) => { if (!o.isMesh) return;
+    o.material.onBeforeCompile = (sh) => { sh.uniforms.uPush = push;
+      sh.vertexShader = "uniform float uPush;\n" + sh.vertexShader.replace("#include <project_vertex>",
+        "#include <project_vertex>\n  mvPosition.xyz *= 1.0 + uPush / max(length(mvPosition.xyz), 1e-4);\n  gl_Position = projectionMatrix * mvPosition;"); };
+    o.material.needsUpdate = true; });
 }
 function loadEst() {
   new GLTFLoader().load(`/files/${curJob.id}/site_estimated.glb`, (g) => {
@@ -764,12 +897,22 @@ function loadEst() {
     $("vinfo").textContent = "주황 = 사진에 안 찍혀 주변 형상으로 메운 곳(측정값 아님)";
   });
 }
-$("splatb").onclick = () => { useSplat = !useSplat; if (useSplat) { showEst = false; setMeasure(false); } syncToggles(); loadModel(false); };
+$("cmpb").onclick = () => setCompare(!cmpOn);
+$("ovlb").onclick = () => { useOvl = !useOvl; if (useOvl) { useSplat = false; useFill = false; showEst = false; if (cmpOn) setCompare(false); }
+  else useSplat = true; syncToggles(); loadModel(false); };
+$("splatb").onclick = () => { useSplat = !useSplat; if (useSplat) { showEst = false; setMeasure(false); } else if (cmpOn) setCompare(false); syncToggles(); loadModel(false); };
 $("fillb").onclick = () => { useFill = !useFill; if (!useFill) showEst = false; syncToggles(); loadModel(false); };
 $("estb").onclick = () => { showEst = !showEst; syncToggles();
   if (showEst) loadEst(); else if (estModel) { scene.remove(estModel); estModel = null; } };
-$("close").onclick = () => { $("viewer").classList.remove("on"); setTool(null); };
-addEventListener("keydown", (e) => { if (e.key === "Escape") $("close").click(); });
+$("close").onclick = () => { setCompare(false); $("viewer").classList.remove("on"); setTool(null); };
+addEventListener("keydown", (e) => {
+  if (e.key === "Escape") return $("close").click();
+  if (!$("viewer").classList.contains("on") || e.target.closest("input,textarea,select")) return;
+  const k = e.key.toLowerCase();
+  if (k === "f") { e.preventDefault(); focusOn(lastPick || controls.target.clone()); }
+  else if (k === "r" && homeView) { e.preventDefault(); flyTo(homeView.t.clone(), homeView.p.clone()); }
+});
+cv.addEventListener("dblclick", (e) => { if (tool) return; const p = pickAt(e, cv, camera); if (p) { markPick(p); setPivot(p); } });
 
 /* ── 현장 표시: 거리·반경·구역·위험 표시 (엔젤스윙 측정·장비·마커 기능을 폰 3D 에 맞게) ──
    좌표는 GLB 와 같은 Y-up, m. 작업마다 annotations.json 으로 저장 → 유니티가 같은 좌표로 읽는다. */
@@ -928,10 +1071,10 @@ cv.addEventListener("pointerup", (e) => {
   if (!tool && camsOn && camG) {
     const h = ray.intersectObjects(camG.children.filter((o) => o.isMesh), false)[0];
     if (h) { showPanel(true); $("aphoto").hidden = false; $("aphotoimg").src = `/api/jobs/${curJob.id}/photo?name=${encodeURIComponent(h.object.userData.name)}`;
-      $("aphotoname").textContent = h.object.userData.name; }
-    return;
+      $("aphotoname").textContent = h.object.userData.name; return; }
   }
-  if (!tool || !model) return;
+  if (!tool) { const p = pickAt(e, cv, camera); if (p) { markPick(p); $("vinfo").textContent = "F: 이 지점으로 확대 · 더블클릭: 회전 중심 · R: 처음 보기"; } return; }
+  if (!model) return;
   const hit = ray.intersectObject(model, true)[0]; if (!hit) return;
   const p = hit.point.clone();
   if (tool === "dist") {

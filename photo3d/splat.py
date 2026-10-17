@@ -162,7 +162,7 @@ def subject_points(dense: Path, masks: Path, min_ratio: float = 0.6) -> np.ndarr
 
 
 def start_splat_spirula(dense: Path, exe: str, steps: int = 30000, max_res: int = 1920, log=print,
-                        subject: bool = False, depth_sup: bool = False) -> dict:
+                        subject: bool = False, depth_sup: bool = False, prior_dir: Path | None = None) -> dict:
     # depth_sup: 깊이 지도 학습. 기본 끔 — 깊이가 사진 한 장에서 추정한 값(MoGe)이라 최고 품질에서 켰더니
     # 화질이 떨어졌다(Spirula 도 기본 끔, 레이저 깊이로도 PSNR 은 그대로라고 함). 레이저 스캔 깊이가 있을 때만 쓸 것
     """Spirula 학습을 백그라운드로: ① 표면 방향 지도(MoGe-2, MIT) ② 학습(노출 보정·잡티 억제·조밀 점 시작)."""
@@ -210,6 +210,15 @@ def start_splat_spirula(dense: Path, exe: str, steps: int = 30000, max_res: int 
             steps_ = [lambda: make_subject_masks(exe, data, logf), geo, train]
     if os.environ.get("PHOTO3D_SPIRULA_GEO") == "0":  # 빠르게: 표면 방향 지도 생략
         steps_ = [c for c in steps_ if c is not geo]
+    if prior_dir is not None and (prior_dir / "normals").exists():
+        # 통합: 사진 한 장 추정(MoGe) 대신 측정 메쉬로 그린 표면 방향(·깊이) 지도를 쓴다 (fuse.write_prior_maps)
+        for sub in ("normals", "depths"):
+            if (prior_dir / sub).exists():
+                shutil.copytree(prior_dir / sub, data / sub, dirs_exist_ok=True)
+        steps_ = [c for c in steps_ if c is not geo]
+        if (prior_dir / "depths").exists() and "--depth-supervision-weight" not in train:
+            train += ["--depth-supervision-weight", os.environ.get("PHOTO3D_FUSE_DEPTH_W", "0.05")]
+        log("  스플랫 학습에 측정 메쉬 표면 방향 지도" + (" + 깊이 지도" if (prior_dir / "depths").exists() else "") + " 사용")
     proc = _Chain(steps_, work, logf)
     return {"proc": proc, "logf": logf, "work": work, "exp": runs, "steps": steps, "engine": "spirula",
             "subject": subject, "data": data}

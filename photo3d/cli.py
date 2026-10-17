@@ -170,33 +170,51 @@ def run(a) -> dict:
                                               str(work), str(cn), "1" if a.dense == "colmap" else "0"],
                                              stdout=fl, stderr=subprocess.STDOUT, env={**os.environ, "PYTHONIOENCODING": "utf-8"}), fl)
             log("  ▶ 구멍 메운 모델: 별도 CPU 프로세스로 동시에 시작")
-        if a.splat_steps > 0:
-            try:
-                from . import splat
-                root = Path(__file__).resolve().parents[1]
-                sp_exe = splat.find_spirula(root, log=log) if a.splat_engine in ("auto", "spirula") else None
-                if sp_exe:
-                    side["splat"] = splat.start_splat_spirula(dense_dir, sp_exe, steps=a.splat_steps,
-                                                              max_res=a.splat_res, log=log, subject=a.subject)
-                    eng = "Spirula"
-                else:
-                    brush = splat.find_brush(root, log=log)
-                    side["splat"] = splat.start_splat(dense_dir, brush, steps=a.splat_steps, max_res=a.splat_res,
-                                                      log=log) if brush else None
-                    eng = "Brush"
-                if side.get("splat"):
-                    side["splat_t0"] = time.time()
-                    log(f"  ▶ 가우시안 스플래팅: GPU 로 동시에 시작({eng}, {a.splat_steps}스텝)")
-                else:
-                    side.pop("splat", None)
-            except Exception as e:
-                log(f"  스플래팅 시작 실패(메쉬 결과는 정상): {e}")
+        if a.splat_steps > 0 and a.pipeline != "fuse":  # 통합은 측정 메쉬가 나온 뒤 그 지도를 넣어 시작
+            start_splat(dense_dir)
+
+    def start_splat(dense_dir: Path, prior_dir: Path | None = None):
+        try:
+            from . import splat
+            root = Path(__file__).resolve().parents[1]
+            sp_exe = splat.find_spirula(root, log=log) if a.splat_engine in ("auto", "spirula") else None
+            if sp_exe:
+                side["splat"] = splat.start_splat_spirula(dense_dir, sp_exe, steps=a.splat_steps,
+                                                          max_res=a.splat_res, log=log, subject=a.subject,
+                                                          prior_dir=prior_dir)
+                eng = "Spirula"
+            else:
+                brush = splat.find_brush(root, log=log)
+                side["splat"] = splat.start_splat(dense_dir, brush, steps=a.splat_steps, max_res=a.splat_res,
+                                                  log=log) if brush else None
+                eng = "Brush"
+            if side.get("splat"):
+                side["splat_t0"] = time.time()
+                log(f"  ▶ 가우시안 스플래팅: GPU 로 동시에 시작({eng}, {a.splat_steps}스텝)")
+            else:
+                side.pop("splat", None)
+        except Exception as e:
+            log(f"  스플래팅 시작 실패(메쉬 결과는 정상): {e}")
 
     res = mvs.densify_and_mesh(rec, img_dir, work, quality=a.quality, engine=a.dense,
                                colmap_bin=a.colmap_bin, on_dense_ready=on_dense_ready, prior=a.prior,
-                               subject=a.subject, resume=resumed, strict=a.pipeline == "pg", log=log)
+                               subject=a.subject, resume=resumed, strict=a.pipeline in ("pg", "fuse"), log=log)
     if a.fill and "fill" not in side and res.get("dense_ply"):  # CPU(OpenMVS) 경로: 콜백 없음 → 지금 시작
         on_dense_ready(work / "dense", res["dense_ply"])
+    if a.pipeline == "fuse" and a.splat_steps > 0 and "splat" not in side:
+        # 통합: 측정 메쉬를 사진마다 그려 표면 방향(·깊이) 지도로 스플랫 학습에 넣는다 → 메쉬 정리·내보내기와 동시에 GPU 학습
+        from . import fuse
+        fm = fuse.pick_mesh(work / "mvs")
+        prior = None
+        if fm is not None and a.subject is False:
+            try:
+                prior = work / "fuse_maps"
+                rep["fuse"] = {"mesh": fm.name, "maps": fuse.write_prior_maps(
+                    fm, work / "dense" / "sparse", prior, depth=os.environ.get("PHOTO3D_FUSE_DEPTH") == "1", log=log)}
+            except Exception as e:
+                log(f"  통합 지도 생략(스플랫은 그대로 학습): {e}")
+                prior = None
+        start_splat(work / "dense", prior)
 
     rep["dense"] = res.get("stats")
     log("5/5 정리·유니티 내보내기")
@@ -205,7 +223,7 @@ def run(a) -> dict:
 
     def add_floor(mesh):
         """포토그래메트리: 비스듬히 찍혀 측정이 빈 바닥을 사진 정사영상 바닥으로 메움"""
-        if a.pipeline != "pg" or a.subject or not dense_pts:
+        if a.pipeline not in ("pg", "fuse") or a.subject or not dense_pts:
             return []
         from .planes import floor_patch
         fm, fi = floor_patch(Path(dense_pts), work / "dense" / "sparse", work / "dense" / "images", mesh,
@@ -237,7 +255,7 @@ def run(a) -> dict:
                                                        out, extra=extra, faces=a.light_faces, log=log)
         except Exception as e:
             log(f"  가벼운 모델 생략: {e}")
-    if a.pipeline == "pg":  # 측량형 결과물: 정사영상·DSM·LAS 점군
+    if a.pipeline in ("pg", "fuse"):  # 측량형 결과물: 정사영상·DSM·LAS 점군
         try:
             from . import survey
             m = cleaned()
@@ -280,8 +298,23 @@ def run(a) -> dict:
             from . import splat
             # 빠른 모드: 본 처리가 끝난 뒤 최대 5분만 더 기다리고 중간본 사용(최고 품질은 끝까지)
             rep["splat"] = splat.finish_splat(side["splat"], out, log=log,
-                                              max_wait=120 if a.profile == "fast" else None)
+                                              max_wait=120 if a.profile == "fast" and a.pipeline != "fuse" else None)
             rep["splat"]["minutes"] = round((time.time() - side["splat_t0"]) / 60, 1)
+            if a.pipeline == "fuse":  # 측정 표면 뒤에 숨은 스플랫 제거 + 메쉬와 일치도
+                from . import fuse
+                fm = fuse.pick_mesh(work / "mvs")
+                if fm is not None:
+                    sp = out / "site_splat.ply"
+                    fi = fuse.mesh_prune_and_agree(sp, fm, work / "dense" / "sparse",
+                                                   Path(dense_pts) if dense_pts else None, sp, log=log)
+                    rep.setdefault("fuse", {})["agree"] = fi
+                    rep["splat"]["splats"] = fi["after"]
+                    try:
+                        from .splatexport import write_spz, write_splat
+                        write_spz(sp, out / "site_splat.spz")
+                        write_splat(sp, out / "site_splat.splat")
+                    except Exception as e:
+                        log(f"  가벼운 스플랫 다시 만들기 생략: {e}")
         except Exception as e:
             log(f"  스플래팅 실패(메쉬 결과는 정상): {e}")
     rep["elapsed_min"] = round((time.time() - t0) / 60, 1)
@@ -394,8 +427,8 @@ def main(argv=None):
                    default=os.environ.get("PHOTO3D_SPLAT_ENGINE", "auto"),
                    help="스플랫 학습 프로그램: auto(Spirula 가 있으면 Spirula, 없으면 Brush)")
     r.add_argument("--splat-res", type=int, default=1920, help="스플래팅 학습 이미지 최대 변 길이(px)")
-    r.add_argument("--pipeline", choices=["splat", "pg"], default="splat",
-                   help="splat: 메쉬 + 가우시안 스플래팅(실사 보기) / pg: 포토그래메트리 전용(측정용 메쉬·정사영상·DSM·점군, 스플랫 없음)")
+    r.add_argument("--pipeline", choices=["splat", "pg", "fuse"], default="splat",
+                   help="splat: 메쉬 + 가우시안 스플래팅(실사 보기) / pg: 포토그래메트리 전용(측정용 메쉬·정사영상·DSM·점군, 스플랫 없음) / fuse: 통합 — 포토그래메트리 + 그 메쉬로 맞춘 스플랫")
     r.add_argument("--masks", help="마스크 폴더(<이미지명>.png, 검정=제외) — 움직이는 사람·장비 제거")
     r.add_argument("--gpu", action="store_true", help="CUDA 지원 COLMAP 일 때 GPU 사용")
     r.add_argument("--colmap-bin", default=os.environ.get("COLMAP_BIN"),
@@ -444,6 +477,12 @@ def main(argv=None):
             a.fill = True
             if a.max_side == 1600:
                 a.max_side = 2400  # 측정용은 빠르게도 해상도를 덜 낮춘다(조밀점·모서리 정확도)
+    if a.cmd == "run" and a.pipeline == "fuse":
+        # 통합: 포토그래메트리(측정용 엄격 메쉬·측량 결과물) + 그 메쉬로 맞춘 스플랫(보기)
+        if a.profile == "fast":
+            a.fill = True
+            if a.max_side == 1600:
+                a.max_side = 2400
     if a.cmd == "run" and a.splat_steps < 0:
         a.splat_steps = {"fast": 7000, "gpu-max": 30000}.get(a.profile, 0)
     if a.cmd == "run" and not a.inputs and not a.from_colmap:

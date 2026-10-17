@@ -305,13 +305,16 @@ DEFAULT_SPI = {"fast": {"1": 0.5, "2": 1.5, "3": 0.2, "4": 10.0, "5": 3.0},
                "best": {"1": 0.8, "2": 3.0, "3": 0.3, "4": 35.0, "5": 25.0},
                # 포토그래메트리: 스플랫 대기 없음, 대신 해상도↑·구멍 메우기·정사영상/DSM/점군
                "pg-fast": {"1": 0.6, "2": 2.0, "3": 0.2, "4": 14.0, "5": 4.0},
-               "pg-best": {"1": 0.8, "2": 3.0, "3": 0.3, "4": 35.0, "5": 6.0}}
+               "pg-best": {"1": 0.8, "2": 3.0, "3": 0.3, "4": 35.0, "5": 6.0},
+               # 통합: 포토그래메트리 다음 그 메쉬로 맞춘 스플랫 학습을 끝까지 기다림
+               "fuse-fast": {"1": 0.6, "2": 2.0, "3": 0.2, "4": 14.0, "5": 12.0},
+               "fuse-best": {"1": 0.8, "2": 3.0, "3": 0.3, "4": 35.0, "5": 30.0}}
 
 
 def _mkey(job: dict) -> str:
     """시간 기록·예측용 모드 이름(포토그래메트리 탭은 따로 기록)"""
     m = job.get("mode", "fast")
-    return f"pg-{m}" if job.get("kind") == "pg" else m
+    return f"{job['kind']}-{m}" if job.get("kind") in ("pg", "fuse") else m
 
 
 def _hist() -> list:
@@ -522,8 +525,8 @@ def run_job(jid: str) -> None:
     src = job.get("local_path") or str(d / "input")
     profile = "gpu-max" if job.get("mode") == "best" else "fast"
     cmd = [sys.executable, "-m", "photo3d", "run", src, "--profile", profile, "--out", str(d / "out")]
-    if job.get("kind") == "pg":
-        cmd += ["--pipeline", "pg"]
+    if job.get("kind") in ("pg", "fuse"):
+        cmd += ["--pipeline", job["kind"]]
     if tools["colmap"]:
         cmd += ["--colmap-bin", tools["colmap"]]
     if job.get("scale"):
@@ -930,7 +933,7 @@ class Handler(BaseHTTPRequestHandler):
                        "created": time.time(), "local_path": lp or None,
                        "scale": b.get("scale") or None, "marker_size": b.get("marker_size") or None,
                        "mode": "best" if b.get("mode") == "best" else "fast", "subject": bool(b.get("subject")),
-                       "kind": "pg" if b.get("kind") == "pg" else "splat"}
+                       "kind": b.get("kind") if b.get("kind") in ("pg", "fuse") else "splat"}
                 save_job(job)
                 return self._json(job, 201)
             m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/stop", p)
