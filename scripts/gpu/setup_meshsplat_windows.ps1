@@ -31,17 +31,21 @@ if (-not $env:CUDA_PATH -or -not (Test-Path (Join-Path $env:CUDA_PATH "bin\nvcc.
 }
 Write-Host "CUDA: $env:CUDA_PATH"
 # PyTorch 2.6+ 윈도우 버그: nvcc 로 .cu 를 빌드하면 compiled_autograd.h 에서 "'std': 모호한 기호"(C2872) →
-#   헤더의 std:: 를 ::std:: 로 바꿔 우회(내용은 같음, 한 번만)
-& $Py -c "import re,pathlib,torch; p=pathlib.Path(torch.__file__).parent/'include/torch/csrc/dynamo/compiled_autograd.h'; s=p.read_text(encoding='utf-8') if p.exists() else ''; t=re.sub(r'(?<![\w:])std::','::std::',s); (p.write_text(t,encoding='utf-8'),print('torch 헤더 패치(std 모호성)')) if s and t!=s else None"
+#   헤더의 std:: 를 ::std:: 로 바꿔 우회(scripts/gpu/torch_win_fix.py)
+& $Py (Join-Path $PSScriptRoot "torch_win_fix.py")
 $env:TORCH_CUDA_ARCH_LIST = "7.5;8.6;8.9;12.0"
 $env:DISTUTILS_USE_SDK = "1"
 # effrdel 은 src 바로 아래 모듈(tetutils·intersect)을 쓰므로 README 대로 -e(편집 설치)여야 import 된다
 foreach ($m in @("diff-triangle-mesh-rasterization", "simple-knn", "effrdel")) {
+  $log = Join-Path $Dir "build_$m.log"
   $src = "$Dir\mesh-splatting\submodules\$m"
   Remove-Item -Recurse -Force "$src\build" -ErrorAction SilentlyContinue
   $e = if ($m -eq "effrdel") { "-e " } else { "" }
-  cmd /c "`"$vcvars`" && `"$Py`" -m pip install --no-build-isolation $e`"$src`""
-  if ($LASTEXITCODE -ne 0) { throw "$m 컴파일 실패 — CUDA Toolkit 12.8 과 VS Build Tools 를 확인하세요." }
+  cmd /c "`"$vcvars`" && `"$Py`" -m pip install --no-build-isolation $e`"$src`" > `"$log`" 2>&1"
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "---- 컴파일 오류 줄 (전체 기록: $log) ----"
+    Select-String -Path $log -Pattern "error C[0-9]+|error:|FAILED:" | Select-Object -First 25 | ForEach-Object { $_.Line }
+    throw "$m 컴파일 실패 — CUDA Toolkit 12.8 과 VS Build Tools 를 확인하세요." }
 }
 # 편집 설치가 src 폴더를 경로에 안 넣는 setuptools 버전도 있어 직접 추가(tetutils·intersect import 보장)
 $site = & $Py -c "import sysconfig; print(sysconfig.get_paths()['purelib'])"
