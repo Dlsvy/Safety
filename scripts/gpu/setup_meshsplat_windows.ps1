@@ -1,4 +1,4 @@
-# GPU PC(NVIDIA, Windows) — MeshSplatting(불투명 삼각형 메쉬, CVPR 2026) 설치
+﻿# GPU PC(NVIDIA, Windows) — MeshSplatting(불투명 삼각형 메쉬, CVPR 2026) 설치
 #   Set-ExecutionPolicy -Scope Process Bypass; .\scripts\gpu\setup_meshsplat_windows.ps1
 # 라이선스: 자체 코드 Apache-2.0, 바탕 3DGS 코드는 Inria 비상업(사용자 확인: 비상업). photo3d 는 별도 프로그램으로 실행만 한다.
 # 필요한 것: PGSR 과 같음 — CUDA Toolkit 12.8, Visual Studio 2022 Build Tools(C++), Python 3.11, git
