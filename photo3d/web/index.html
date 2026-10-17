@@ -126,21 +126,24 @@ details input{margin-top:6px;width:100%}
 .pv .cap{position:absolute;left:8px;bottom:6px;font-size:11.5px;color:#cfd3d8}
 @media (max-width:560px){.prog{grid-template-columns:1fr}}
 #livepane{display:none}
-/* 사진 보기 창(넓은 화면 오른쪽): 휠로 한 장씩 */
-body{--pw:clamp(300px,19vw,440px)}
+/* 사진 보기 창(넓은 화면 오른쪽): 휠로 한 장씩. 옆 패널이 있으면 입력 칸을 왼쪽 끝으로 붙이고
+   나머지 너비를 꽉 채운다(왼쪽 빈 공간 없앰) */
 #photopane{display:none}
-body.hasphotos #photopane{display:flex;flex-direction:column;position:fixed;top:20px;bottom:20px;right:16px;width:var(--pw);
-  background:var(--panel,#1c1f24);border:1px solid var(--line);border-radius:12px;padding:12px;gap:8px;z-index:2}
-body.hasphotos:not(.haslive) .wrap{margin-left:max(16px,calc(50vw - 490px - var(--pw) / 2 - 16px));margin-right:0}
-body.hasphotos.haslive #livepane{right:calc(var(--pw) + 28px) !important}
+body.hasphotos #photopane{display:flex;flex-direction:column;position:fixed;top:20px;bottom:20px;right:16px;
+  left:1012px;background:var(--panel,#1c1f24);border:1px solid var(--line);border-radius:12px;padding:12px;gap:8px;z-index:2}
+body.hasphotos .wrap,body.haslive .wrap{margin-left:16px !important;margin-right:0}
+body.haslive #livepane{left:1012px !important;right:16px !important}
+/* 둘 다 있으면 위(실시간 3D 55%)·아래(사진 45%)로 — 가로 사진이 넓게 보인다 */
+body.hasphotos.haslive #livepane{bottom:calc(45vh + 6px) !important}
+body.hasphotos.haslive #photopane{top:calc(55vh + 6px)}
 #photopane .phead{display:flex;justify-content:space-between;gap:8px;font-size:14px}
 #photopane .phead span{color:var(--muted);font-variant-numeric:tabular-nums}
-#photopane .pmain{flex:0 0 auto;aspect-ratio:4/3;background:#0f1113;border-radius:8px;display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:ns-resize}
+#photopane .pmain{flex:1;min-height:0;background:#0f1113;border-radius:8px;display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:ns-resize}
 #photopane .pmain img{max-width:100%;max-height:100%;object-fit:contain;display:block}
 #photopane .pname{font:12px var(--mono);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#photopane .pstrip{flex:1;overflow-y:auto;display:grid;grid-template-columns:repeat(3,1fr);gap:4px;align-content:start}
-#photopane .pstrip img{width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:4px;cursor:pointer;opacity:.75;background:#0f1113}
-#photopane .pstrip img.on{opacity:1;outline:2px solid var(--accent)}
+#photopane .pstrip{flex:0 0 84px;overflow-x:auto;overflow-y:hidden;display:flex;gap:4px;padding:3px}
+#photopane .pstrip img{flex:0 0 auto;height:72px;aspect-ratio:4/3;object-fit:cover;border-radius:4px;cursor:pointer;opacity:.55;background:#0f1113}
+#photopane .pstrip img.on{opacity:1;outline:3px solid var(--accent);outline-offset:1px}
 /* 사용량 그래프(최근 90초) */
 .m[data-k][hidden]{display:none !important}
 canvas.spark{width:64px;height:18px;display:block}
@@ -685,7 +688,7 @@ function photoSource() {
 }
 async function updatePhotos() {
   const src = photoSource();
-  const wide = window.matchMedia("(min-width:1900px)").matches || (window.matchMedia("(min-width:1500px)").matches && !document.body.classList.contains("haslive"));
+  const wide = window.matchMedia("(min-width:1500px)").matches;
   document.body.classList.toggle("hasphotos", !!src && wide);
   if (!src || !wide) return;
   if (src.key === PH.key) return;
@@ -715,7 +718,7 @@ function showPhoto(k) {
   $("phidx").textContent = `${PH.i + 1} / ${PH.items.length}장`;
   const st = $("phstrip").children;
   for (const im of st) im.classList.remove("on");
-  if (st[PH.i]) { st[PH.i].classList.add("on"); st[PH.i].scrollIntoView({block: "nearest"}); }
+  if (st[PH.i]) { st[PH.i].classList.add("on"); st[PH.i].scrollIntoView({block: "nearest", inline: "center"}); }
   for (const d of [1, 2, 3]) { const n = PH.items[(PH.i + d) % PH.items.length]; if (n) new Image().src = n.big; }   // 다음 사진 미리 받기
 }
 let phWheel = 0;
