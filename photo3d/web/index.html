@@ -324,6 +324,7 @@ canvas.spark.big{width:100%;height:34px}
   <div class="vbar">
     <span class="t" id="vt"></span>
     <button id="splatb" aria-pressed="false" hidden>실사 보기</button>
+    <button id="bestb" aria-pressed="false" hidden title="최적 합성: 스플랫(실사 형태) + 포토그래메트리 면(속이 꽉 찬 표면) — 비쳐 보이던 지붕·벽이 막힘">최적 합성</button>
     <button id="ovlb" aria-pressed="false" hidden title="실사(스플랫) 뒤에 측정 메쉬를 깔아 구멍을 메움 — 거리 재기·표시는 메쉬 기준">겹쳐 보기</button>
     <button id="cmpb" aria-pressed="false" hidden title="왼쪽 실사(스플래팅)·오른쪽 메쉬(포토그래메트리)를 나란히 — 한쪽을 돌리면 같이 돕니다">나란히 비교</button>
     <a class="btn" id="dlspz" hidden download title="실사(스플랫) 압축본 — SuperSplat·Postshot 등에서 열림, 원본의 약 1/10">실사 .spz</a>
@@ -342,6 +343,7 @@ canvas.spark.big{width:100%;height:34px}
     </span>
     <button id="camsb" aria-pressed="false" hidden>촬영 위치</button>
     <button id="apanelb" aria-pressed="false">표시 목록</button>
+    <a class="btn" id="dlunity" download title="유니티 패키지: 유니티에서 더블클릭(또는 Assets > Import Package)하면 현장 프리팹이 자동으로 만들어짐 — glTFast 설치 불필요, 1 unit = 1 m">유니티 패키지</a>
     <a class="btn" id="dl" download>GLB 내려받기</a>
     <button id="openf" title="이 PC 에서 결과 폴더(GLB·스플랫·보고서)를 탐색기로 엽니다">결과 폴더</button>
     <button id="close">닫기</button>
@@ -879,7 +881,7 @@ async function setCompare(on) {
     }
     if (cmpModel) { scene2.remove(cmpModel); cmpModel = null; }
     // 메인 보기와 같은 모델(구멍 메운 모델이 있으면 그것)로 비교
-    const j = curJob, file = j.has_filled ? "site_filled.glb" : j.has_light ? "site_model_light.glb" : "site_model.glb";
+    const j = curJob, file = j.has_best_mesh ? "site_best_mesh.glb" : j.has_filled ? "site_filled.glb" : j.has_light ? "site_model_light.glb" : "site_model.glb";
     new GLTFLoader().load(`/files/${j.id}/${file}`, (g) => { cmpModel = g.scene; basic(cmpModel); scene2.add(cmpModel); });
     if (!useSplat || useOvl) { useOvl = false; useSplat = true; syncToggles(); loadModel(false); }
     $("vinfo").textContent = "왼쪽 실사 · 오른쪽 메쉬 — 한쪽을 돌리면 같이 돕니다 · 더블클릭: 회전 중심 · 클릭 후 F: 확대";
@@ -900,11 +902,14 @@ async function openViewer(j) {
   resize();
   $("vt").textContent = j.name; $("dl").href = `/files/${j.id}/site_model.glb?dl=${encodeURIComponent(j.name + ".glb")}`;
   $("dl").setAttribute("download", `${j.name}.glb`);
+  $("dlunity").href = `/api/jobs/${j.id}/unitypackage`; $("dlunity").setAttribute("download", `${j.name}.unitypackage`);
   $("openf").onclick = () => api(`/api/jobs/${j.id}/open`, {method: "POST"}).catch((e) => alert(e.message));
   useFill = !!j.has_filled; showEst = false; useSplat = !!j.has_splat;
   // 통합 결과는 겹쳐 보기로 연다(실사 + 메쉬로 구멍 메움)
   useOvl = !!(j.has_splat && j.has_model && j.kind === "fuse"); if (useOvl) { useSplat = false; useFill = false; }
   $("ovlb").hidden = !(j.has_splat && j.has_model); ovlPush = 0; splatMeta = null;
+  $("bestb").hidden = !j.has_best; useBest = !!j.has_best;   // 최적 합성이 있으면 그것부터
+  if (useBest) { useSplat = true; useOvl = false; useFill = false; }
   if (j.has_splat) await api(`/files/${j.id}/report.json`).then((r) => {
     ovlPush = (r.fuse && r.fuse.agree && r.fuse.agree.tau_m) || 0; splatMeta = r.splat || null; }).catch(() => {});
   $("fillb").hidden = !j.has_filled; $("estb").hidden = !j.has_est; $("splatb").hidden = !j.has_splat;
@@ -927,6 +932,8 @@ let useFill = false, showEst = false, estModel = null, useSplat = false, splatVi
 function syncToggles(){
   $("splatb").classList.toggle("on", useSplat); $("splatb").setAttribute("aria-pressed", useSplat);
   $("ovlb").classList.toggle("on", useOvl); $("ovlb").setAttribute("aria-pressed", useOvl);
+  $("bestb").classList.toggle("on", useSplat && useBest); $("bestb").setAttribute("aria-pressed", useSplat && useBest);
+  $("splatb").classList.toggle("on", useSplat && !useBest);
   $("fillb").disabled = useSplat || useOvl; document.querySelectorAll("[data-tool]").forEach((b) => b.disabled = useSplat && !useOvl);
   $("fillb").classList.toggle("on", useFill); $("fillb").setAttribute("aria-pressed", useFill);
   $("estb").classList.toggle("on", showEst); $("estb").setAttribute("aria-pressed", showEst);
@@ -940,6 +947,7 @@ async function clearScene() {
   if (splatView) { scene.remove(splatView); try { await splatView.dispose(); } catch (e) {} splatView = null; }
   clearMarks();
 }
+let useBest = false;
 async function loadSplat(frame, keep = false) {
   if (!keep) await clearScene();
   $("vinfo").textContent = "실사(가우시안 스플래팅) 불러오는 중… 큰 파일은 수십 초 걸립니다";
@@ -952,7 +960,7 @@ async function loadSplat(frame, keep = false) {
       sceneRevealMode: GS.SceneRevealMode.Instant, sphericalHarmonicsDegree: nsp > 4e6 ? 1 : 2,
       antialiased: !!(splatMeta && splatMeta.antialiased)});   // 가운데부터 서서히 나타나는 효과 끔(느린 PC·비교 보기에서 일부만 보임)
     // 스플랫은 Z-up(측량 좌표), 메쉬 GLB 는 Y-up → X축 -90° 회전으로 맞춘다
-    await splatView.addSplatScene(`/files/${curJob.id}/site_splat.ply`,
+    await splatView.addSplatScene(`/files/${curJob.id}/${useBest ? "site_best.ply" : "site_splat.ply"}`,
       {rotation: [-Math.SQRT1_2, 0, 0, Math.SQRT1_2], showLoadingUI: false, splatAlphaRemovalThreshold: 5,
        format: GS.SceneFormat.Ply});
     scene.add(splatView);
@@ -1028,7 +1036,8 @@ function focusOn(p) {    // 지점을 회전 중심으로 하고 지금 거리�
 async function loadModel(frame) {
   if (useSplat) return loadSplat(frame);
   // 면이 많은 모델은 보기용 가벼운 모델로(측정·내려받기는 원본)
-  const j = curJob, file = useFill ? "site_filled.glb" : (j.has_light ? "site_model_light.glb" : "site_model.glb");
+  // 최적 합성 메쉬(포토그래메트리 + 스플랫 메쉬로 빈 곳 채움)가 있으면 그것을 보기용으로
+  const j = curJob, file = useFill ? "site_filled.glb" : j.has_best_mesh ? "site_best_mesh.glb" : (j.has_light ? "site_model_light.glb" : "site_model.glb");
   $("vinfo").textContent = "불러오는 중…";
   await clearScene();
   await new Promise((res) => new GLTFLoader().load(`/files/${j.id}/${file}`, (g) => {
@@ -1063,7 +1072,8 @@ function loadEst() {
 $("cmpb").onclick = () => setCompare(!cmpOn);
 $("ovlb").onclick = () => { useOvl = !useOvl; if (useOvl) { useSplat = false; useFill = false; showEst = false; if (cmpOn) setCompare(false); }
   else useSplat = true; syncToggles(); loadModel(false); };
-$("splatb").onclick = () => { useSplat = !useSplat; if (useSplat) { showEst = false; setMeasure(false); } else if (cmpOn) setCompare(false); syncToggles(); loadModel(false); };
+$("bestb").onclick = () => { useBest = true; useSplat = true; useOvl = false; showEst = false; setMeasure(false); syncToggles(); loadModel(false); };
+$("splatb").onclick = () => { if (useSplat && useBest) { useBest = false; syncToggles(); loadModel(false); return; } useBest = false; useOvl = false; useSplat = !useSplat; if (useSplat) { showEst = false; setMeasure(false); } else if (cmpOn) setCompare(false); syncToggles(); loadModel(false); };
 $("fillb").onclick = () => { useFill = !useFill; if (!useFill) showEst = false; syncToggles(); loadModel(false); };
 $("estb").onclick = () => { showEst = !showEst; syncToggles();
   if (showEst) loadEst(); else if (estModel) { scene.remove(estModel); estModel = null; } };

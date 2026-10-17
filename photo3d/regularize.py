@@ -58,8 +58,8 @@ def segment(Nf: np.ndarray, a: np.ndarray, b: np.ndarray, nF: int, cos_t: float)
 def _fit(Pc: np.ndarray, w: np.ndarray):
     c = (Pc * w[:, None]).sum(0) / w.sum()
     X = (Pc - c) * np.sqrt(w)[:, None]
-    _, _, vt = np.linalg.svd(X, full_matrices=False)
-    n = vt[2]
+    _, ev = np.linalg.eigh(X.T @ X)  # 3×3 공분산의 가장 작은 고유벡터 = 법선(점 개수와 무관)
+    n = ev[:, 0]
     return n / np.linalg.norm(n), c
 
 
@@ -91,7 +91,7 @@ def _planar_parts(idx: np.ndarray, C: np.ndarray, A: np.ndarray, Nf: np.ndarray,
         n, c = _fit(C[part], A[part])  # 다듬은 평면으로 다시 고른다
         inl = (np.abs((P - c) @ n) < 2 * tol) & (np.abs(Nl @ n) > np.cos(np.radians(20)))
         part = left[inl]
-        if A[part].sum() < min_area:
+        if A[part].sum() < min_area or len(part) < 20:
             break
         out.append(part)
         left = left[~inl]
@@ -147,10 +147,12 @@ def regularize(V: np.ndarray, F: np.ndarray, spacing: float, log=print, angle: f
     N0 = cr / np.maximum(2 * A[:, None], 1e-18)
     C = T.mean(1)
     le = float(np.median(np.linalg.norm(T[:, 1] - T[:, 0], axis=1)))
-    tol = max(spacing, 0.5 * le)  # 측정 잡음 수준
-    R = max(4 * spacing, 3 * le)  # 정점이 움직일 수 있는 최대 거리(둥근 모서리 반경 정도)
+    # 허용치는 측정 점 간격 기준으로만(메쉬 삼각형 크기 기준이면 빠르게 모드의 거친 메쉬에서 한도가 0.5m 까지 커져
+    # 평면오차 82mm 짜리 '평면'을 받아들이고 처마가 말려 올라갔다 — PC 결과)
+    tol = spacing  # 측정 잡음 수준
+    R = min(max(4 * spacing, 1.5 * le), 8 * spacing)  # 정점이 움직일 수 있는 최대 거리(둥근 모서리 반경 정도)
     if min_area is None:
-        min_area = (12 * max(spacing, le)) ** 2  # 창대 앞면(5cm×1m)도 점 간격 1cm면 조각이 된다
+        min_area = (12 * max(spacing, 0.5 * le)) ** 2  # 창대 앞면(5cm×1m)도 점 간격 1cm면 조각이 된다
     a, b = _face_graph(F, nF)
     Nf = filter_normals(N0, A, a, b)
     lab = segment(Nf, a, b, nF, np.cos(np.radians(angle)))

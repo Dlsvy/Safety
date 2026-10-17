@@ -171,3 +171,152 @@ def pick_mesh(mvs_dir: Path) -> Path | None:
         if (mvs_dir / n).exists():
             return mvs_dir / n
     return None
+
+
+def _quat_from_z(n: np.ndarray) -> np.ndarray:
+    """국소 z축을 법선 n 으로 돌리는 사원수(w,x,y,z) — 납작한 원판 스플랫용"""
+    z = np.array([0.0, 0.0, 1.0])
+    v = np.cross(np.broadcast_to(z, n.shape), n)
+    w = 1.0 + n[:, 2]
+    q = np.concatenate([w[:, None], v], 1)
+    bad = w < 1e-6  # n = -z
+    q[bad] = [0.0, 1.0, 0.0, 0.0]
+    return q / np.linalg.norm(q, axis=1, keepdims=True)
+
+
+def make_best(out: Path, work: Path, max_backing: int = 1_500_000, log=print) -> dict | None:
+    """'최적 합성' 모델(site_best.ply, 가우시안 스플랫 형식):
+    스플랫의 장점(실사 같은 형태·얇은 물체·자연스러운 색) + 포토그래메트리의 장점(속이 꽉 찬 면).
+    1) 측정 표면 뒤에 숨은 스플랫·표면에서 먼 잡티 제거(mesh_prune_and_agree)
+    2) 표면 위인데 반투명한 스플랫은 불투명도를 올림(지붕·벽이 비쳐 보이는 것 줄이기)
+    3) 표면 바로 뒤(허용오차 절반)에 메쉬 텍스처 색의 납작한 불투명 스플랫 층을 깐다 → 스플랫이 비는 곳은
+       포토그래메트리 면이 보이고, 스플랫이 있는 곳은 스플랫이 앞에 보인다(겹쳐 보기를 파일 하나로)"""
+    import trimesh
+    from scipy.spatial import cKDTree
+    from .splatclean import read_splat, write_splat
+    from .survey import _tex_colors
+    sp = out / "site_splat.ply"
+    mesh_p = out / "site_model_zup.obj"
+    if not sp.exists() or not mesh_p.exists():
+        return None
+    meshp = pick_mesh(work / "mvs")
+    dense = work / "dense" / "fused.ply" if (work / "dense" / "fused.ply").exists() else work / "mvs" / "scene_dense.ply"
+    tmp = out / "_best_tmp.ply"
+    info = mesh_prune_and_agree(sp, meshp or mesh_p, work / "dense" / "sparse", dense if dense.exists() else None,
+                                tmp, log=lambda *_: None)
+    a, props, _ = read_splat(tmp)
+    tmp.unlink(missing_ok=True)
+    col = {q: i for i, q in enumerate(props)}
+    tau = info["tau_m"]
+    m = trimesh.load(mesh_p, process=False, force="mesh")
+    surf, fi = trimesh.sample.sample_surface(m, 1_000_000, seed=1)
+    d = cKDTree(surf).query(a[:, [col["x"], col["y"], col["z"]]].astype(np.float64), workers=-1)[0]
+    # 2) 표면 위 반투명 → 불투명하게(로짓 공간: 0.35 미만을 0.35~0.75 로 끌어올림)
+    op = 1 / (1 + np.exp(-a[:, col["opacity"]].astype(np.float64)))
+    near = d < 1.5 * tau
+    boost = near & (op > 0.05) & (op < 0.75)
+    op2 = np.where(boost, np.clip(0.35 + 0.6 * op, 0, 0.9), op)
+    a[:, col["opacity"]] = np.log(op2 / (1 - op2)).astype(np.float32)
+    # 3) 메쉬 뒤 받침 층
+    area = float(m.area)
+    step = max(2 * tau / 3, np.sqrt(area / max_backing))
+    n = int(min(max_backing, area / step ** 2))
+    P, fidx = trimesh.sample.sample_surface_even(m, n, radius=step * 0.7, seed=2) if n < 400_000 else \
+        trimesh.sample.sample_surface(m, n, seed=2)
+    fidx = np.asarray(fidx)
+    T = m.vertices[m.faces[fidx]]
+    # 무게중심 좌표로 텍스처 색
+    v0, v1, v2 = T[:, 1] - T[:, 0], T[:, 2] - T[:, 0], P - T[:, 0]
+    d00, d01, d11 = (v0 * v0).sum(1), (v0 * v1).sum(1), (v1 * v1).sum(1)
+    d20, d21 = (v2 * v0).sum(1), (v2 * v1).sum(1)
+    den = np.maximum(d00 * d11 - d01 * d01, 1e-18)
+    bv, bw = (d11 * d20 - d01 * d21) / den, (d00 * d21 - d01 * d20) / den
+    bary = np.clip(np.stack([1 - bv - bw, bv, bw], 1), 0, 1)
+    rgb = _tex_colors(m, fidx, bary).astype(np.float32) / 255.0
+    nrm = m.face_normals[fidx]
+    # 법선을 사진 쪽으로 돌린 뒤 반대쪽(표면 뒤)으로 tau/2 밀어 둔다
+    try:
+        import pycolmap
+        rec = pycolmap.Reconstruction(work / "dense" / "sparse")
+        C = np.array([rec.image(i).projection_center() for i in rec.reg_image_ids()])
+        near_c = C[cKDTree(C).query(P, workers=-1)[1]]
+        flip = ((near_c - P) * nrm).sum(1) < 0
+        nrm[flip] *= -1
+    except Exception:
+        pass
+    P = P - nrm * (0.5 * tau)
+    b = np.zeros((len(P), len(props)), np.float32)
+    b[:, col["x"]], b[:, col["y"]], b[:, col["z"]] = P.T
+    for k in range(3):
+        b[:, col[f"f_dc_{k}"]] = (rgb[:, k] - 0.5) / 0.28209479177
+    b[:, col["opacity"]] = np.log(0.97 / 0.03)
+    b[:, col["scale_0"]] = b[:, col["scale_1"]] = np.log(step * 0.75)
+    b[:, col["scale_2"]] = np.log(max(step * 0.05, 1e-5))
+    q = _quat_from_z(nrm)
+    for k in range(4):
+        b[:, col[f"rot_{k}"]] = q[:, k]
+    for k in ("nx", "ny", "nz"):
+        if k in col:
+            b[:, col[k]] = 0
+    dst = out / "site_best.ply"
+    write_splat(dst, np.vstack([a, b]), props, comment="photo3d: best-of-both (splat + photogrammetry backing), Z-up")
+    res = {"file": dst.name, "splats": int(len(a)), "backing": int(len(b)), "boosted": int(boost.sum()),
+           "removed_hidden": info["hidden_removed"], "backing_step_m": round(float(step), 4), "tau_m": tau}
+    log(f"  최적 합성: 스플랫 {len(a):,}개(숨은 것 {info['hidden_removed']:,}개 제거·반투명 {int(boost.sum()):,}개 불투명하게) + "
+        f"포토그래메트리 면 받침 {len(b):,}개({step * 100:.1f}cm 간격) → {dst.name}")
+    try:
+        from .splatexport import write_spz
+        write_spz(dst, out / "site_best.spz")
+    except Exception:
+        pass
+    return res
+
+
+def merge_meshes(pg_path: Path, gs_path: Path, dense_ply: Path | None, dst: Path, log=print) -> dict | None:
+    """최적 합성 메쉬: 포토그래메트리 메쉬(측정점에 붙은 면)는 그대로 두고, 그것이 없는 곳(구멍·얇은 물체·형태가
+    애매해 측정점이 빠진 곳)만 스플랫 메쉬로 채운다. 같은 곳에 둘 다 있으면 측정한 포토그래메트리가 우선.
+    그 뒤 건물 정형화(평면·모서리)를 합친 메쉬에 다시 적용."""
+    import trimesh
+    from scipy.spatial import cKDTree
+    pg = trimesh.load(pg_path, process=False, force="mesh")
+    gs = trimesh.load(gs_path, process=False, force="mesh")
+    pg.merge_vertices()
+    gs.merge_vertices()
+    if not len(pg.faces) or not len(gs.faces):
+        return None
+    surf = np.asarray(trimesh.sample.sample_surface(pg, 2_000_000, seed=0)[0])
+    tree = cKDTree(surf)
+    if dense_ply is not None and Path(dense_ply).exists():
+        from .fill import read_points
+        dp = np.asarray(read_points(dense_ply)[0], float)
+        sub = dp[np.random.default_rng(0).choice(len(dp), min(len(dp), 20000), replace=False)]
+        sp = float(np.median(cKDTree(dp).query(sub, k=2)[0][:, 1]))
+    else:
+        sp = float(np.median(tree.query(surf[:20000], k=2)[0][:, 1]))
+    tau = 3 * sp
+    d = tree.query(gs.triangles_center, workers=-1)[0]
+    keep = d > 2 * tau  # 포토그래메트리 면이 없는 곳만
+    add = gs.copy()
+    add.update_faces(keep)
+    add.remove_unreferenced_vertices()
+    if len(add.faces):  # 몇 면짜리 부스러기는 버린다
+        cc = trimesh.graph.connected_components(add.face_adjacency, nodes=np.arange(len(add.faces)))
+        m = np.zeros(len(add.faces), bool)
+        for c in cc:
+            if len(c) >= 50:
+                m[c] = True
+        add.update_faces(m)
+        add.remove_unreferenced_vertices()
+    for g in (pg, add):  # 색: 정점 색 그대로(텍스처는 사진에서 다시 굽는다)
+        if g.visual.kind != "vertex":
+            g.visual = g.visual.to_color() if g.visual.kind else trimesh.visual.ColorVisuals(g)
+    merged = trimesh.util.concatenate([pg, add]) if len(add.faces) else pg
+    merged.export(dst)
+    from .regularize import regularize_mesh
+    out = regularize_mesh(dst, dense_ply, dst, log=log) if dense_ply is not None and Path(dense_ply).exists() else dst
+    info = {"pg_faces": int(len(pg.faces)), "added_faces": int(len(add.faces)),
+            "added_area_ratio": round(float(add.area / max(pg.area + add.area, 1e-12)), 3), "tau_m": round(tau, 4),
+            "file": Path(out).name}
+    log(f"  최적 합성 메쉬: 포토그래메트리 {len(pg.faces):,}면 + 스플랫 메쉬로 채운 곳 {len(add.faces):,}면"
+        f"(표면의 {info['added_area_ratio']:.0%})")
+    return info

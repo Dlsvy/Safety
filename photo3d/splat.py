@@ -194,7 +194,9 @@ def start_splat_spirula(dense: Path, exe: str, steps: int = 30000, max_res: int 
     geo = [exe, "geometry", str(data), "--max-size", "1064", "--normal-format", "jpg"] + (["--depth"] if depth_sup else [])
     train = [exe, "train", "centered-object" if subject else "3dgs", "--data", str(data), "--num-iterations", str(steps), "--disable-viewer", "1",
              "--scene-center", "none", "--seed-pointcloud", "init.ply", "--cap-max", cap,
-             "--floater-suppression", "mild", "--train-resolution-divisor", str(div),
+             # 통합(prior_dir): 한 픽셀이 한 표면에만 붙게 더 강하게 — 지붕·벽이 비쳐 보이는 반투명 줄이기
+             # (Spirula 측정: strong 이어도 PSNR 차이 0.05dB 이내)
+             "--floater-suppression", "strong" if prior_dir is not None else "mild", "--train-resolution-divisor", str(div),
              "--output-dir-prefix", str(runs), "--output-dir-name", "run",
              "--steps-per-save", os.environ.get("PHOTO3D_SPIRULA_SAVE", "2000")] \
         + (["--depth-supervision-weight", "0.05"] if depth_sup else []) \
@@ -222,7 +224,7 @@ def start_splat_spirula(dense: Path, exe: str, steps: int = 30000, max_res: int 
         log("  스플랫 학습에 측정 메쉬 표면 방향 지도" + (" + 깊이 지도" if (prior_dir / "depths").exists() else "") + " 사용")
     proc = _Chain(steps_, work, logf)
     return {"proc": proc, "logf": logf, "work": work, "exp": runs, "steps": steps, "engine": "spirula",
-            "subject": subject, "data": data, "mip": os.environ.get("PHOTO3D_SPLAT_MIP") == "1"}
+            "subject": subject, "data": data, "mip": os.environ.get("PHOTO3D_SPLAT_MIP") == "1", "exe": exe}
 
 
 def find_brush(root: Path, download: bool = True, log=print) -> str | None:
@@ -451,3 +453,29 @@ def finish_splat(h: dict, out: Path, log=print, max_wait: float | None = None) -
 def train_splat(dense: Path, out: Path, brush: str, steps: int = 30000, max_res: int = 1920,
                 log=print) -> dict:
     return finish_splat(start_splat(dense, brush, steps, max_res, log), out, log)
+
+
+def mesh_from_splat(h: dict, out_base: Path, log=print, timeout: float = 3600) -> Path | None:
+    """학습한 스플랫에서 메쉬 뽑기(Spirula `mesh`, CUDA): 카메라들에서 본 불투명도로 점유를 정하고(공간 깎기)
+    들로네 사면체 위에서 표면을 잡는다(Gaussian Opacity Fields 방식) — 얇은 물체·복잡한 형태가 잘 남는다.
+    out_base.ply 를 돌려준다(스플랫과 같은 좌표 = 조밀복원 좌표, Z-up)."""
+    if h.get("engine") != "spirula":
+        return None
+    exe = h.get("exe")
+    runs = sorted((p for p in h["exp"].glob("**/step-*.ckpt") if p.is_dir()),
+                  key=lambda p: int(p.name.split("-")[1].split(".")[0]))
+    if not exe or not runs:
+        return None
+    cmd = [exe, "mesh", str(runs[-1]), "--data", str(h["data"]), "--format", "ply", "--color", "vertex",
+           "--output", str(out_base), "--carve-k", "2", "--quiet"]
+    log("  $ spirula mesh (스플랫 → 메쉬, GPU)")
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, encoding="utf-8", errors="replace")
+    except Exception as e:
+        log(f"  스플랫 메쉬 실패: {e}")
+        return None
+    p = Path(str(out_base) + ".ply")
+    if r.returncode != 0 or not p.exists():
+        log("  스플랫 메쉬 실패: " + (r.stderr or r.stdout)[-300:].replace("\n", " | "))
+        return None
+    return p

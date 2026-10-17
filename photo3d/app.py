@@ -590,6 +590,8 @@ def job_view(job: dict) -> dict:
     v["has_filled"] = (d / "out" / "site_filled.glb").exists()
     v["has_est"] = (d / "out" / "site_estimated.glb").exists()
     v["has_splat"] = (d / "out" / "site_splat.ply").exists()
+    v["has_best"] = (d / "out" / "site_best.ply").exists()
+    v["has_best_mesh"] = (d / "out" / "site_best_mesh.glb").exists()
     v["has_ortho"] = (d / "out" / "site_ground_ortho.jpg").exists()
     v["has_survey"] = (d / "out" / "site_ortho.jpg").exists()
     v["has_las"] = (d / "out" / "site_points.las").exists()
@@ -640,7 +642,8 @@ def run_job(jid: str) -> None:
     env["PYTHONIOENCODING"] = "utf-8"
     src = job.get("local_path") or str(d / "input")
     profile = "gpu-max" if job.get("mode") == "best" else "fast"
-    cmd = [sys.executable, "-m", "photo3d", "run", src, "--profile", profile, "--out", str(d / "out")]
+    cmd = [sys.executable, "-m", "photo3d", "run", src, "--profile", profile, "--out", str(d / "out"),
+           "--name", job.get("name") or job["id"]]
     if job.get("kind") in ("pg", "fuse"):
         cmd += ["--pipeline", job["kind"]]
     if tools["colmap"]:
@@ -1025,6 +1028,14 @@ class Handler(BaseHTTPRequestHandler):
                 if base not in q.parents or not q.is_file():
                     return self._json({"error": "없음"}, 404)
                 return self._file(q)
+            m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/unitypackage", p)
+            if m:  # 지금 표시(annotations.json)까지 넣어 새로 만들어 내려준다
+                job = load_job(m.group(1))
+                from .unitypkg import write_unity_package
+                f = write_unity_package(job_dir(m.group(1)) / "out", job.get("name") or job["id"], log=lambda *_: None)
+                if f is None:
+                    return self._json({"error": "모델이 없어 만들 수 없습니다"}, 404)
+                return self._file(f, download=f"{job.get('name') or job['id']}.unitypackage")
             m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/rev", p)
             if m:  # 미리보기가 바뀌었는지만 가볍게(파일 목록·시각) — 화면이 1초마다 묻는다
                 src = _preview_source(job_dir(m.group(1)))

@@ -309,6 +309,23 @@ def run(a) -> dict:
                     fi = fuse.mesh_prune_and_agree(sp, fm, work / "dense" / "sparse",
                                                    Path(dense_pts) if dense_pts else None, sp, log=log)
                     rep.setdefault("fuse", {})["agree"] = fi
+                    # 최적 합성 메쉬: 포토그래메트리 + (그것이 없는 곳만) 스플랫에서 뽑은 메쉬 → 정형화 → 사진 텍스처
+                    try:
+                        gm = splat.mesh_from_splat(side["splat"], work / "splat" / "gs_mesh", log=log)
+                        if gm is not None:
+                            dpl = Path(dense_pts) if dense_pts else None
+                            mi = fuse.merge_meshes(fm, gm, dpl, work / "mvs" / "scene_mesh_best.ply", log=log)
+                            if mi:
+                                import trimesh
+                                from .texture import bake
+                                bm = trimesh.load(work / "mvs" / mi["file"], process=False, force="mesh")
+                                tm, _ = bake(bm, work / "dense" / "sparse", work / "dense" / "images",
+                                             atlas=8192, max_faces=1_200_000, log=log)
+                                tm.apply_transform(export.ZUP_TO_YUP)
+                                tm.export(out / "site_best_mesh.glb")
+                                rep["fuse"]["best_mesh"] = mi
+                    except Exception as e:
+                        log(f"  최적 합성 메쉬 생략: {e}")
                     rep["splat"]["splats"] = fi["after"]
                     try:
                         from .splatexport import write_spz, write_splat
@@ -318,6 +335,12 @@ def run(a) -> dict:
                         log(f"  가벼운 스플랫 다시 만들기 생략: {e}")
         except Exception as e:
             log(f"  스플래팅 실패(메쉬 결과는 정상): {e}")
+        if (out / "site_splat.ply").exists():
+            try:  # 최적 합성: 스플랫(형태·실사) + 포토그래메트리 면(속이 꽉 찬 표면) — 뷰어 '최적 합성'
+                from . import fuse
+                rep["best"] = fuse.make_best(out, work, log=log)
+            except Exception as e:
+                log(f"  최적 합성 생략: {e}")
     rep["elapsed_min"] = round((time.time() - t0) / 60, 1)
     ends = [t for _, t in stage_t[1:]] + [time.time() - t0]
     rep["timing_s"] = {name: round(e - b, 1) for (name, b), e in zip(stage_t, ends)}
@@ -329,6 +352,11 @@ def run(a) -> dict:
         report.write(out, rep, work, log=log)
     except Exception as e:
         log(f"  품질 보고서 생략: {e}")
+    try:  # 유니티에서 더블클릭으로 바로 가져가는 패키지(OBJ + 스크립트 + 자동 프리팹)
+        from .unitypkg import write_unity_package
+        write_unity_package(out, a.name or Path(a.out).resolve().parent.name, log=log)
+    except Exception as e:
+        log(f"  유니티 패키지 생략: {e}")
     log(f"완료 — 등급 {rep['grade']['grade']}: {rep['grade']['reason']}")
     return rep
 
@@ -400,6 +428,7 @@ def main(argv=None):
     r.add_argument("--max-side", type=int, default=3200, help="입력 이미지 긴 변 최대 픽셀")
     r.add_argument("--video-frames", type=int, default=150)
     r.add_argument("--collider-faces", type=int, default=150_000)
+    r.add_argument("--name", default=None, help="현장 이름(유니티 패키지 폴더·프리팹 이름)")
     r.add_argument("--light-over", type=int, default=1_500_000, help="면이 이보다 많으면 보기용 가벼운 모델(site_model_light.glb)도 만듦")
     r.add_argument("--light-faces", type=int, default=600_000, help="가벼운 모델의 면 수")
     r.add_argument("--features", default="sift", choices=["sift", "sift_hq", "sift_lg", "aliked"],
