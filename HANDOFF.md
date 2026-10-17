@@ -85,6 +85,15 @@ README.md 에 전체 설명·검증 결과가 있다. 먼저 README 를 읽어�
   torch_win_fix.py(torch 헤더 std 모호성 C2872), meshsplat_win_fix.py(or·uint·sqrt(int) 리눅스 전용 문법).
 - 저장소 compile.bat 은 옛 폴더명이라 안 됨 → 설치 스크립트가 세 확장을 직접 빌드. effrdel 은 src 경로 .pth 추가.
 
+## 폰 앱 (2026-10-17, PC 에서 확인 필요)
+- PC 앱 오른쪽 위 '📱 폰 연결' → QR. 폰 화면 /m (photo3d/web/m.html, 홈 화면 추가 가능한 웹앱). 서버: photo3d/mobile.py.
+- 짝맞춤 토큰(app_data/mobile_token.txt): PC 밖 요청은 쿠키 p3d 필요. 터널은 localhost 로 들어오므로 Cf-Ray 등 헤더로 원격 판정(_is_local).
+- 카메라는 https 에서만: 같은 와이파이 https://<IP>:8766(자체 서명, cryptography 자동 설치) / 현장은 cloudflared 임시 터널(자동 내려받기).
+- 자동 촬영: 프레임 간 이동 누적으로 겹침 75% 에서 촬영, 자이로 25°/s 넘으면 대기, 라플라시안 선명도 중앙값 60% 미만 건너뜀,
+  첫 장 뒤 색온도 고정, 줌 최소, 화면 꺼짐 방지, 방향별 한 바퀴 링, GPS → input/_gps.json(frames.exif_gps 가 읽음).
+- 업로드: IndexedDB 대기열, 4MB 조각 이어 올리기(PUT files?offset=), 업로드 끝나면 자동 3D 시작(start 에 mode·kind).
+- 클라우드 확인: 토큰/쿠키·원격 차단·조각 업로드 동일성·GPS·헤드리스 크롬 가짜 카메라로 촬영→업로드. 실제 폰(iOS/안드로이드) 미확인.
+
 ## 지켜야 할 것
 - 사용자는 비상업 용도 → 연구용 라이선스(PGSR 등)도 사용 가능(docs/GPU_PC.md). 상업 용도로 바뀌면 빼야 함.
 - 새 기법은 실사 벤치마크(eval_strecha.py)로 숫자 확인 후 채택(클라우드에서 sift_hq·refine_pp 는 효과 없어 옵션으로만 둠).

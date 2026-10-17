@@ -1,0 +1,520 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>현장 3D 촬영</title>
+<link rel="manifest" href="/m/manifest.webmanifest">
+<link rel="icon" href="/m/icon.svg">
+<link rel="apple-touch-icon" href="/m/icon.svg">
+<meta name="theme-color" content="#151719">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>
+:root{--bg:#151719;--panel:#1f2226;--ink:#eceae4;--muted:#9aa0a6;--line:#33373c;--accent:#f2b705;--ok:#5fbf86;--bad:#ff7b6e;--run:#6aa5ff;
+  --sans:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:16px/1.5 var(--sans);-webkit-tap-highlight-color:transparent}
+main,section.page{padding:16px 16px calc(24px + env(safe-area-inset-bottom));max-width:640px;margin:0 auto}
+h1{font-size:22px;margin:4px 0 2px}h1 b{background:var(--accent);color:#151719;padding:0 6px;border-radius:4px}
+h2{font-size:17px;margin:22px 0 8px}
+.muted{color:var(--muted);font-size:14px}
+input[type=text]{width:100%;font:inherit;padding:12px;border-radius:10px;border:1px solid var(--line);background:var(--panel);color:var(--ink)}
+button,.btn{font:inherit;font-weight:700;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:12px;padding:14px;
+  display:flex;align-items:center;justify-content:center;gap:10px;text-decoration:none;cursor:pointer;min-height:52px}
+button:disabled{opacity:.45}
+.big{width:100%;font-size:18px;min-height:64px;margin:10px 0}
+.primary{background:var(--accent);border-color:var(--accent);color:#151719}
+.row{display:flex;gap:10px}.row>*{flex:1}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;margin:8px 0}
+.card .t{font-weight:700}.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin:8px 0 4px}
+.bar>i{display:block;height:100%;background:var(--run);width:0}
+.st-done{color:var(--ok)}.st-failed{color:var(--bad)}.st-running,.st-queued{color:var(--run)}
+.opt{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--line);border-radius:12px;padding:12px;margin:8px 0;background:var(--panel)}
+.opt input{margin-top:5px;width:20px;height:20px}
+.warn{background:#3a2a10;border:1px solid #6b4d12;border-radius:10px;padding:10px 12px;font-size:14px;margin:10px 0}
+/* 촬영 화면 */
+#cam{position:fixed;inset:0;background:#000;z-index:5}
+#cam video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.hud{position:absolute;left:0;right:0;padding:10px 14px;display:flex;gap:10px;align-items:center;text-shadow:0 1px 3px #000}
+.hud.top{top:0;padding-top:calc(10px + env(safe-area-inset-top));background:linear-gradient(#000a,#0000)}
+.hud.bot{bottom:0;padding-bottom:calc(14px + env(safe-area-inset-bottom));background:linear-gradient(#0000,#000b);justify-content:space-between}
+.pill{background:#000a;border-radius:20px;padding:4px 10px;font-weight:700;font-size:14px;white-space:nowrap}
+#guide{position:absolute;left:12px;right:12px;top:42%;text-align:center;font-size:22px;font-weight:800;text-shadow:0 2px 6px #000;pointer-events:none}
+#guide small{display:block;font-size:15px;font-weight:600;opacity:.9}
+#ovl{position:absolute;left:14px;right:14px;top:calc(56px + env(safe-area-inset-top));height:10px;background:#0008;border-radius:5px;overflow:hidden}
+#ovl>i{display:block;height:100%;width:0;background:var(--ok);transition:width .15s}
+#ring{width:64px;height:64px}
+#shut{width:78px;height:78px;border-radius:50%;border:5px solid #fff;background:#fff3;min-height:0;padding:0}
+#shut.rec{background:#e33;border-color:#fff}
+#flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;transition:opacity .25s}
+.small{min-height:44px;padding:8px 14px;font-size:15px;border-radius:22px;background:#000a;border-color:#fff4}
+.small.on{background:var(--accent);color:#151719;border-color:var(--accent)}
+#frame{position:absolute;inset:0;pointer-events:none;border:6px solid transparent;transition:border-color .2s}
+</style>
+</head>
+<body>
+
+<main id="home">
+  <h1>현장 <b>3D</b> 촬영</h1>
+  <div class="muted" id="conn">PC 연결 확인 중…</div>
+  <h2>현장 이름</h2>
+  <input type="text" id="name" maxlength="60" autocomplete="off">
+  <button class="big primary" id="bPhoto">📷 자동 촬영 <span class="muted" style="color:#151719">(추천)</span></button>
+  <button class="big" id="bVideo">🎥 동영상 촬영</button>
+  <div class="row">
+    <label class="btn" for="fCam">📸 기본 카메라</label>
+    <label class="btn" for="fPick">🖼 앨범에서 고르기</label>
+  </div>
+  <input type="file" id="fCam" accept="image/*" capture="environment" hidden>
+  <input type="file" id="fPick" accept="image/*,video/*" multiple hidden>
+  <div id="secwarn" class="warn" hidden>자동 촬영·동영상은 보안 연결(https)에서만 됩니다. PC 화면 <b>폰 연결</b>의 QR(①번 또는 ②번)로 다시 여세요.
+    지금은 <b>기본 카메라</b>·<b>앨범</b>으로 올릴 수 있습니다.</div>
+  <div id="cur"></div>
+  <h2>최근 3D</h2>
+  <div id="jobs" class="muted">불러오는 중…</div>
+  <h2>촬영 요령(앱이 자동으로 도와줍니다)</h2>
+  <div class="muted">· 건물 둘레를 <b>천천히 걸으며</b> 한 바퀴(높은 건물은 두 바퀴: 멀리서 한 번, 가까이서 한 번)<br>
+    · 제자리에서 돌지 말고 <b>옆으로 걸으세요</b> — 앱이 겹침 70~80%마다 알아서 찍습니다<br>
+    · 흔들리거나 흐린 순간은 앱이 건너뜁니다 · 역광·유리·물웅덩이는 피하기</div>
+</main>
+
+<section id="cam" hidden>
+  <video id="vid" playsinline muted autoplay></video>
+  <div id="frame"></div>
+  <div id="flash"></div>
+  <div class="hud top">
+    <span class="pill" id="cnt">0장</span>
+    <span class="pill" id="upl">↑ 0</span>
+    <span class="pill" id="gpsI">GPS …</span>
+    <span style="flex:1"></span>
+    <svg id="ring" viewBox="-36 -36 72 72" aria-label="한 바퀴 진행"></svg>
+  </div>
+  <div id="ovl"><i></i></div>
+  <div id="guide">카메라 준비 중…</div>
+  <div class="hud bot">
+    <button class="small on" id="autoB">자동 ON</button>
+    <button id="shut" aria-label="찍기"></button>
+    <button class="small" id="endB">완료</button>
+  </div>
+</section>
+
+<section id="done" class="page" hidden>
+  <h1>촬영 완료</h1>
+  <div class="card"><div class="t" id="dName"></div>
+    <div class="muted" id="dUp">업로드 확인 중…</div><div class="bar"><i id="dBar"></i></div></div>
+  <div id="dWarn"></div>
+  <h2>3D 품질</h2>
+  <label class="opt"><input type="radio" name="q" value="best" checked><span><b>고품질(추천)</b><br>
+    <span class="muted">측정 메쉬 + 실사 + 불투명 유니티 모델 · PC 에서 약 1~3시간</span></span></label>
+  <label class="opt"><input type="radio" name="q" value="fast"><span><b>빠른 미리보기</b><br>
+    <span class="muted">찍은 상태 확인용 · 약 10~30분</span></span></label>
+  <button class="big primary" id="go">3D 만들기</button>
+  <div class="muted" id="goMsg">업로드가 끝나면 자동으로 시작합니다. 앱을 닫아도 이미 올라간 사진은 PC 에 남습니다.</div>
+  <div class="row"><button id="more">더 찍기</button><button id="home2">처음으로</button></div>
+</section>
+
+<section id="pair" class="page" hidden>
+  <h1>PC 와 연결하기</h1>
+  <p>PC 에서 <b>현장 3D 앱 → 📱 폰 연결</b>을 누르고, 나오는 <b>QR 코드를 폰 카메라로 찍으세요.</b></p>
+  <p class="muted">한 번 연결하면 이 폰은 계속 기억합니다. 홈 화면에 추가하면 앱처럼 열 수 있습니다.</p>
+</section>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const show = (id) => { for (const s of ["home", "cam", "done", "pair"]) $(s).hidden = s !== id; };
+const ls = { get: (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+             set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
+
+async function api(path, opt = {}) {
+  const r = await fetch(path, {credentials: "same-origin", ...opt});
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401 && j.need_pair) { show("pair"); throw new Error("연결 필요"); }
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+const jsonPost = (path, body, method = "POST") => api(path, {method, headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});
+
+/* ── 업로드 대기열(IndexedDB) — 촬영 즉시 쌓고 뒤에서 올린다, 끊기면 이어서 ── */
+let DB;
+function idb() {
+  if (DB) return Promise.resolve(DB);
+  return new Promise((res, rej) => {
+    const r = indexedDB.open("p3d", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("q", {keyPath: "id", autoIncrement: true});
+    r.onsuccess = () => res(DB = r.result); r.onerror = () => rej(r.error);
+  });
+}
+async function tx(mode, fn) {
+  const db = await idb();
+  return new Promise((res, rej) => { const t = db.transaction("q", mode); const out = fn(t.objectStore("q")); t.oncomplete = () => res(out && out.result); t.onerror = () => rej(t.error); });
+}
+const qAdd = (rec) => tx("readwrite", (s) => s.add(rec));
+const qPut = (rec) => tx("readwrite", (s) => s.put(rec));
+const qDel = (id) => tx("readwrite", (s) => s.delete(id));
+const qAll = () => tx("readonly", (s) => s.getAll());
+
+const ST = { get: () => ls.get("p3d_cur", null), set: (v) => ls.set("p3d_cur", v) };  // 지금 현장: {job, name, total, start, mode}
+let upBusy = false, upErr = "";
+async function pump() {
+  if (upBusy) return; upBusy = true;
+  try {
+    for (;;) {
+      const all = await qAll(); const r = all[0];
+      renderUp(all);
+      if (!r) break;
+      try { await sendRec(r); upErr = ""; }
+      catch (e) { upErr = e.message; renderUp(all); if (e.message === "연결 필요") break; await sleep(Math.min(30000, 3000 * (1 + (r.tries = (r.tries || 0) + 1)))); }
+    }
+  } finally { upBusy = false; renderUp(await qAll()); autoStart(); }
+}
+async function sendRec(r) {
+  const CH = 4 << 20; let off = r.sent || 0;
+  while (off < r.blob.size) {
+    const res = await fetch(`/api/jobs/${r.job}/files?name=${encodeURIComponent(r.name)}&offset=${off}`,
+                            {method: "PUT", body: r.blob.slice(off, off + CH), credentials: "same-origin"});
+    const j = await res.json().catch(() => ({}));
+    if (res.status === 409 && typeof j.size === "number") { off = Math.min(j.size, r.blob.size); r.sent = off; await qPut(r); continue; }
+    if (res.status === 401) { show("pair"); throw new Error("연결 필요"); }
+    if (!res.ok) throw new Error(j.error || res.statusText);
+    off = j.size; r.sent = off; await qPut(r); renderUp();
+  }
+  if (r.gps) await jsonPost(`/api/jobs/${r.job}/gps`, {[r.name]: r.gps}, "PUT").catch(() => {});
+  await qDel(r.id);
+}
+let lastAll = [];
+function renderUp(all) {
+  if (all) lastAll = all;
+  const cur = ST.get(); if (!cur) return;
+  const left = lastAll.filter((x) => x.job === cur.job);
+  const done = Math.max(0, (cur.total || 0) - left.length);
+  const bytesLeft = left.reduce((a, x) => a + x.blob.size - (x.sent || 0), 0);
+  $("upl").textContent = left.length ? `↑ ${done}/${cur.total}` : `↑ ${cur.total} ✓`;
+  $("dUp").textContent = left.length ? `PC 로 올리는 중 ${done}/${cur.total} (${(bytesLeft / 1e6).toFixed(0)} MB 남음)${upErr ? " · 다시 시도 중: " + upErr : ""}`
+                                     : `${cur.total}개 모두 PC 에 올라감 ✓`;
+  $("dBar").style.width = (cur.total ? 100 * done / cur.total : 0) + "%";
+}
+window.addEventListener("online", pump);
+
+async function ensureJob() {
+  let cur = ST.get();
+  if (cur && cur.job && !cur.started) return cur;
+  const name = $("name").value.trim() || defaultName();
+  const j = await jsonPost("/api/jobs", {name, kind: "fuse", mode: "best"});
+  cur = {job: j.id, name, total: 0, started: false}; ST.set(cur); return cur;
+}
+async function enqueue(blob, name, gps) {
+  const cur = await ensureJob();
+  await qAdd({job: cur.job, name, blob, gps: gps || null, sent: 0});
+  cur.total = (cur.total || 0) + 1; ST.set(cur); pump();
+}
+async function autoStart() {
+  const cur = ST.get();
+  if (!cur || !cur.want || cur.started) return;
+  if ((await qAll()).some((x) => x.job === cur.job)) return;
+  try {
+    await jsonPost(`/api/jobs/${cur.job}/start`, {mode: cur.want, kind: "fuse"});
+    cur.started = true; ST.set(cur);
+    $("goMsg").textContent = "PC 에서 3D 를 만들기 시작했습니다. 처음 화면에서 진행 상황을 볼 수 있습니다.";
+    refreshJobs();
+  } catch (e) { $("goMsg").textContent = "시작 실패: " + e.message; }
+}
+
+/* ── 센서: 흔들림(자이로)·방향(나침반)·GPS ── */
+const SEN = {rate: 0, heading: null, gps: null, acc: null};
+function sensorsOn() {
+  addEventListener("devicemotion", (e) => {
+    const r = e.rotationRate; if (!r) return;
+    const v = Math.hypot(r.alpha || 0, r.beta || 0, r.gamma || 0);
+    SEN.rate = SEN.rate * 0.6 + v * 0.4;
+  });
+  const ori = (e) => {
+    if (typeof e.webkitCompassHeading === "number") SEN.heading = e.webkitCompassHeading;
+    else if (e.absolute && typeof e.alpha === "number") SEN.heading = (360 - e.alpha) % 360;
+  };
+  addEventListener("deviceorientationabsolute", ori); addEventListener("deviceorientation", ori);
+  if (navigator.geolocation) navigator.geolocation.watchPosition((p) => {
+    SEN.acc = p.coords.accuracy;
+    SEN.gps = p.coords.accuracy < 40 ? [p.coords.latitude, p.coords.longitude, p.coords.altitude || 0] : null;
+    $("gpsI").textContent = SEN.gps ? `GPS ±${Math.round(p.coords.accuracy)}m` : "GPS 약함";
+  }, () => { $("gpsI").textContent = "GPS 없음"; }, {enableHighAccuracy: true, maximumAge: 2000});
+}
+async function askSensors() {  // iOS: 버튼을 누른 순간에만 권한 요청 가능
+  try { if (typeof DeviceMotionEvent !== "undefined" && DeviceMotionEvent.requestPermission) await DeviceMotionEvent.requestPermission(); } catch {}
+  try { if (typeof DeviceOrientationEvent !== "undefined" && DeviceOrientationEvent.requestPermission) await DeviceOrientationEvent.requestPermission(); } catch {}
+}
+
+/* ── 카메라 ── */
+let stream = null, track = null, imgCap = null, wake = null, mode = "photo";
+async function openCamera(forVideo) {
+  stream = await navigator.mediaDevices.getUserMedia({audio: false, video: {
+    facingMode: {ideal: "environment"}, width: {ideal: forVideo ? 1920 : 4032}, height: {ideal: forVideo ? 1080 : 3024}, frameRate: {ideal: 30}}});
+  track = stream.getVideoTracks()[0];
+  const caps = track.getCapabilities ? track.getCapabilities() : {}, adv = {};
+  if (caps.zoom) adv.zoom = caps.zoom.min;                              // 디지털 줌 끔(화질 손실)
+  if ((caps.focusMode || []).includes("continuous")) adv.focusMode = "continuous";
+  if ((caps.exposureMode || []).includes("continuous")) adv.exposureMode = "continuous";
+  if ((caps.whiteBalanceMode || []).includes("continuous")) adv.whiteBalanceMode = "continuous";
+  if (caps.torch) adv.torch = false;
+  try { await track.applyConstraints({advanced: [adv]}); } catch {}
+  $("vid").srcObject = stream; await $("vid").play().catch(() => {});
+  imgCap = (!forVideo && "ImageCapture" in window) ? new ImageCapture(track) : null;
+  try { wake = await navigator.wakeLock.request("screen"); } catch {}  // 촬영 중 화면 꺼짐 방지
+}
+function closeCamera() {
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  stream = track = imgCap = null;
+  try { wake && wake.release(); } catch {} wake = null;
+}
+let wbLocked = false;
+async function lockWhiteBalance() {  // 첫 장 뒤 색온도 고정 → 사진마다 색이 달라지지 않게(3D 텍스처 얼룩 방지)
+  if (wbLocked || !track || !track.getCapabilities) return; wbLocked = true;
+  const caps = track.getCapabilities(), s = track.getSettings();
+  if ((caps.whiteBalanceMode || []).includes("manual") && s.colorTemperature)
+    try { await track.applyConstraints({advanced: [{whiteBalanceMode: "manual", colorTemperature: s.colorTemperature}]}); } catch {}
+}
+async function stillBlob() {
+  if (imgCap) {
+    try {
+      const pc = await imgCap.getPhotoCapabilities().catch(() => null);
+      const o = {fillLightMode: "off"};
+      if (pc && pc.imageWidth) o.imageWidth = pc.imageWidth.max;
+      return await imgCap.takePhoto(o);
+    } catch { imgCap = null; }  // 안 되는 폰은 화면 프레임으로
+  }
+  const v = $("vid"), c = document.createElement("canvas");
+  c.width = v.videoWidth; c.height = v.videoHeight;
+  c.getContext("2d").drawImage(v, 0, 0);
+  return await new Promise((r) => c.toBlob(r, "image/jpeg", 0.93));
+}
+
+/* ── 자동 촬영: 겹침(화면 이동량)·흔들림·초점을 보고 좋은 순간에만 ── */
+const AW = 160, AH = 120, SW = 80, SH = 60;
+const ac = document.createElement("canvas"); ac.width = AW; ac.height = AH;
+const actx = ac.getContext("2d", {willReadFrequently: true});
+const A = {prev: null, cx: 0, cy: 0, sharpHist: [], lastShot: 0, shots: 0, auto: true, bins: new Array(24).fill(0),
+           key: null, timer: null, steadySince: 0, fast: false};
+function grab() {
+  actx.drawImage($("vid"), 0, 0, AW, AH);
+  const d = actx.getImageData(0, 0, AW, AH).data, g = new Float32Array(AW * AH);
+  for (let i = 0; i < g.length; i++) g[i] = 0.299 * d[4 * i] + 0.587 * d[4 * i + 1] + 0.114 * d[4 * i + 2];
+  return g;
+}
+function sharpness(g) {  // 라플라시안 분산 — 흐리면 작다
+  let s = 0, s2 = 0, n = 0;
+  for (let y = 1; y < AH - 1; y++) for (let x = 1; x < AW - 1; x++) {
+    const i = y * AW + x, l = 4 * g[i] - g[i - 1] - g[i + 1] - g[i - AW] - g[i + AW]; s += l; s2 += l * l; n++;
+  }
+  const m = s / n; return s2 / n - m * m;
+}
+function small(g) {  // 80×60, 평균 0(밝기 변화에 강하게)
+  const o = new Float32Array(SW * SH); let m = 0;
+  for (let y = 0; y < SH; y++) for (let x = 0; x < SW; x++) {
+    const i = 2 * y * AW + 2 * x, v = (g[i] + g[i + 1] + g[i + AW] + g[i + AW + 1]) / 4; o[y * SW + x] = v; m += v;
+  }
+  m /= o.length; for (let i = 0; i < o.length; i++) o[i] -= m; return o;
+}
+function shift(a, b, R) {  // b 가 a 에서 얼마나 밀렸나(픽셀) — 작은 범위 블록 맞춤
+  let best = 1e18, bx = 0, by = 0;
+  for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+    let s = 0, n = 0;
+    const x0 = Math.max(0, dx), x1 = Math.min(SW, SW + dx), y0 = Math.max(0, dy), y1 = Math.min(SH, SH + dy);
+    for (let y = y0; y < y1; y += 2) for (let x = x0; x < x1; x += 2) { s += Math.abs(a[y * SW + x] - b[(y - dy) * SW + x - dx]); n++; }
+    s /= n; if (s < best) { best = s; bx = dx; by = dy; }
+  }
+  return [bx, by, best];
+}
+function diff(a, b) { let s = 0; for (let i = 0; i < a.length; i += 3) s += Math.abs(a[i] - b[i]); return s / (a.length / 3); }
+function median(a) { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1] || 0; }
+
+function guide(text, sub, color) {
+  $("guide").innerHTML = text + (sub ? `<small>${sub}</small>` : "");
+  $("frame").style.borderColor = color || "transparent";
+}
+function tick() {
+  const v = $("vid"); if (!v.videoWidth) return;
+  const g = grab(), sm = small(g), sh = sharpness(g);
+  A.sharpHist.push(sh); if (A.sharpHist.length > 40) A.sharpHist.shift();
+  if (A.prev) {  // 프레임 사이 이동을 누적 → 마지막 사진 대비 겹침
+    const [dx, dy] = shift(A.prev, sm, 10);
+    A.fast = Math.abs(dx) >= 10 || Math.abs(dy) >= 10;
+    A.cx += dx / SW; A.cy += dy / SH;
+  }
+  A.prev = sm;
+  const ov = Math.max(0, (1 - Math.min(1, Math.abs(A.cx))) * (1 - Math.min(1, Math.abs(A.cy))));
+  $("ovl").firstElementChild.style.width = (100 * ov) + "%";
+  $("ovl").firstElementChild.style.background = ov < 0.55 ? "var(--bad)" : ov < 0.8 ? "var(--ok)" : "var(--accent)";
+  const now = performance.now();
+  const shaky = SEN.rate > 25 || A.fast;                       // 회전 25°/s 넘거나 화면이 확 움직임
+  const sharpOk = A.sharpHist.length < 5 || sh >= 0.6 * median(A.sharpHist);
+  if (shaky) A.steadySince = now; const steady = now - A.steadySince > 250;
+  if (mode === "video") {
+    guide(rec ? `● 녹화 ${fmtT((now - recT0) / 1000)}` : "녹화 버튼을 누르세요",
+          SEN.rate > 40 ? "너무 빨라요 — 천천히 돌리세요" : "건물 둘레를 천천히 걸으세요", SEN.rate > 40 ? "var(--bad)" : null);
+    return;
+  }
+  if (!A.auto) { guide("", ""); return; }
+  if (A.shots === 0) {
+    if (steady && sharpOk && now - A.lastShot > 800) return shoot("첫 장");
+    return guide("건물을 화면에 담고 잠깐 멈추세요", "자동으로 첫 장을 찍습니다");
+  }
+  if (shaky) return guide("흔들림 — 잠깐 멈추세요", "멈추면 자동으로 찍습니다", "var(--bad)");
+  if (!sharpOk) return guide("초점 맞추는 중…", "", "#f2b70588");
+  const moved = ov <= 0.75;                                     // 겹침 70~75% 지점에서 찍는다
+  const changed = A.key && diff(A.key, sm) > 18 && now - A.lastShot > 3000;  // 다가가기·물러나기(화면이 커지거나 작아짐)
+  if ((moved || changed) && steady && now - A.lastShot > 600) return shoot(ov < 0.5 ? "빨랐음" : "");
+  if (ov < 0.5) return guide("너무 빨라요! 천천히", "겹침이 부족하면 3D 에 구멍이 납니다", "var(--bad)");
+  guide("옆으로 천천히 걸으세요", `겹침 ${Math.round(ov * 100)}% · 75% 에서 자동 촬영`);
+}
+async function shoot(why) {
+  A.lastShot = performance.now(); A.cx = 0; A.cy = 0; A.key = A.prev;
+  $("flash").style.opacity = 0.6; setTimeout(() => { $("flash").style.opacity = 0; }, 90);
+  try { navigator.vibrate && navigator.vibrate(25); } catch {}
+  const gps = SEN.gps;
+  const blob = await stillBlob();
+  if (!blob) return;
+  A.shots++; $("cnt").textContent = `${A.shots}장`;
+  if (SEN.heading !== null) A.bins[Math.floor(SEN.heading / 15) % 24]++;
+  drawRing(); lockWhiteBalance();
+  const t = new Date(), nm = `p3d_${t.toISOString().slice(0, 19).replace(/[-:T]/g, "")}_${String(A.shots).padStart(4, "0")}.jpg`;
+  enqueue(blob, nm, gps);
+  if (why === "빨랐음") guide("조금 빨랐어요 — 천천히", "", "var(--bad)");
+}
+function drawRing() {  // 바깥 링: 방향별로 찍은 구간(한 바퀴 진행) — 나침반 없으면 장수만
+  const s = $("ring"); let h = "";
+  const cov = A.bins.filter((b) => b > 0).length;
+  for (let i = 0; i < 24; i++) {
+    const a0 = (i * 15 - 90) * Math.PI / 180, a1 = ((i + 1) * 15 - 91) * Math.PI / 180;
+    const p = (a, r) => `${(r * Math.cos(a)).toFixed(1)} ${(r * Math.sin(a)).toFixed(1)}`;
+    h += `<path d="M${p(a0, 30)} A30 30 0 0 1 ${p(a1, 30)}" stroke="${A.bins[i] ? "#5fbf86" : "#ffffff40"}" stroke-width="7" fill="none"/>`;
+  }
+  h += `<text x="0" y="5" fill="#fff" font-size="15" font-weight="700" text-anchor="middle">${SEN.heading === null ? A.shots : Math.round(100 * cov / 24) + "%"}</text>`;
+  s.innerHTML = h;
+}
+
+/* ── 동영상 ── */
+let rec = null, recT0 = 0, chunks = [];
+const fmtT = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+function pickMime() {
+  for (const m of ["video/mp4;codecs=avc1", "video/mp4", "video/webm;codecs=vp9", "video/webm"])
+    if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m;
+  return "";
+}
+function startRec() {
+  const mime = pickMime(); chunks = [];
+  rec = new MediaRecorder(stream, mime ? {mimeType: mime, videoBitsPerSecond: 16e6} : {videoBitsPerSecond: 16e6});
+  rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  rec.onstop = () => {
+    const type = rec.mimeType || mime || "video/webm", ext = type.includes("mp4") ? "mp4" : "webm";
+    const t = new Date(), nm = `p3d_${t.toISOString().slice(0, 19).replace(/[-:T]/g, "")}.${ext}`;
+    enqueue(new Blob(chunks, {type}), nm, SEN.gps); rec = null; $("shut").classList.remove("rec");
+    A.shots++; $("cnt").textContent = `영상 ${A.shots}개`;
+  };
+  rec.start(1000); recT0 = performance.now(); $("shut").classList.add("rec");
+}
+
+/* ── 화면 흐름 ── */
+async function startCapture(kind) {
+  mode = kind; await askSensors();
+  if (!window.isSecureContext || !navigator.mediaDevices) { $("secwarn").hidden = false; return; }
+  if (!sensorsStarted) { sensorsOn(); sensorsStarted = true; }
+  try { await ensureJob(); } catch (e) { alert("PC 에 연결할 수 없습니다: " + e.message); return; }
+  show("cam"); guide("카메라 준비 중…");
+  Object.assign(A, {prev: null, cx: 0, cy: 0, sharpHist: [], lastShot: 0, shots: 0, key: null, steadySince: performance.now()});
+  A.bins.fill(0); wbLocked = false; drawRing();
+  $("cnt").textContent = kind === "video" ? "영상 0개" : "0장";
+  $("autoB").hidden = kind === "video";
+  try { await openCamera(kind === "video"); }
+  catch (e) { show("home"); alert("카메라를 열 수 없습니다: " + e.message); return; }
+  A.timer = setInterval(tick, 125); renderUp(await qAll());
+}
+let sensorsStarted = false;
+function stopCapture() {
+  clearInterval(A.timer); A.timer = null;
+  if (rec) rec.stop();
+  closeCamera();
+}
+$("bPhoto").onclick = () => startCapture("photo");
+$("bVideo").onclick = () => startCapture("video");
+$("autoB").onclick = () => { A.auto = !A.auto; $("autoB").textContent = A.auto ? "자동 ON" : "자동 OFF"; $("autoB").classList.toggle("on", A.auto); };
+$("shut").onclick = () => {
+  if (mode === "video") { rec ? rec.stop() : startRec(); return; }
+  shoot("");
+};
+$("endB").onclick = async () => { stopCapture(); await sleep(300); toDone(); };
+function toDone() {
+  const cur = ST.get(); if (!cur) { show("home"); return; }
+  $("dName").textContent = cur.name;
+  const n = cur.total || 0, warn = [];
+  if (mode === "photo" && n && n < 20) warn.push(`사진이 ${n}장으로 적습니다. 3D 가 끊길 수 있어요 — 40장 이상 권장(<b>더 찍기</b>)`);
+  const cov = A.bins.filter((b) => b > 0).length;
+  if (mode === "photo" && SEN.heading !== null && cov < 18 && n >= 20) warn.push(`둘레의 ${Math.round(100 * cov / 24)}% 만 찍었습니다. 한 바퀴를 다 돌면 빈 면이 없습니다.`);
+  $("dWarn").innerHTML = warn.map((w) => `<div class="warn">${w}</div>`).join("");
+  show("done"); pump();
+}
+$("more").onclick = () => startCapture(mode);
+$("home2").onclick = () => { show("home"); refreshJobs(); };
+$("go").onclick = async () => {
+  const cur = ST.get(); if (!cur) return;
+  cur.want = document.querySelector("input[name=q]:checked").value; ST.set(cur);
+  try { if ("Notification" in window && Notification.permission === "default") await Notification.requestPermission(); } catch {}
+  $("goMsg").textContent = "업로드가 끝나는 대로 PC 에서 3D 를 시작합니다…";
+  autoStart(); pump();
+};
+async function addFiles(files) {
+  for (const f of files) await enqueue(f, f.name, null);  // 앨범 사진은 사진 속 GPS(EXIF)를 그대로 쓴다
+  mode = "photo"; toDone();
+}
+$("fCam").onchange = (e) => addFiles([...e.target.files]);
+$("fPick").onchange = (e) => addFiles([...e.target.files]);
+
+/* ── 처음 화면: 연결·최근 작업·진행률·완료 알림 ── */
+const LABEL = {uploading: "올리는 중", queued: "대기", running: "3D 만드는 중", done: "완료", failed: "멈춤/실패"};
+let known = ls.get("p3d_known", {});
+async function refreshJobs() {
+  try {
+    const d = await api("/api/jobs");
+    $("conn").textContent = "✓ PC 와 연결됨" + (window.isSecureContext ? "" : " (보안 연결 아님)");
+    const box = $("jobs"); box.replaceChildren();
+    if (!d.jobs.length) box.textContent = "아직 없습니다.";
+    for (const j of d.jobs.slice(0, 12)) {
+      const c = document.createElement("div"); c.className = "card";
+      const pct = j.status === "done" ? 100 : (j.pct || 0);
+      c.innerHTML = `<div class="t">${esc(j.name)}</div>
+        <div class="st-${j.status}">${LABEL[j.status] || j.status}${j.status === "running" && j.eta_min ? ` · 약 ${j.eta_min}분 남음` : ""}${j.wait_info ? " · " + esc(j.wait_info) : ""}</div>
+        ${j.status === "running" || j.status === "queued" ? `<div class="bar"><i style="width:${pct}%"></i></div><div class="muted">${esc(j.last_log || "")}</div>` : ""}
+        ${j.status === "done" ? `<div class="row" style="margin-top:8px"><a class="btn" href="/?job=${j.id}">3D 보기</a><a class="btn" href="/api/jobs/${j.id}/unitypackage">유니티 파일</a></div>` : ""}
+        ${j.status === "failed" && j.error ? `<div class="muted">${esc(j.error)}</div>` : ""}`;
+      box.append(c);
+      if (known[j.id] && known[j.id] !== "done" && j.status === "done") notify(`3D 완성: ${j.name}`);
+      known[j.id] = j.status;
+    }
+    ls.set("p3d_known", known);
+    const cur = ST.get();
+    $("cur").innerHTML = cur && !cur.started ? `<div class="card"><div class="t">이어서: ${esc(cur.name)} (${cur.total || 0}개)</div>
+      <div class="row" style="margin-top:8px"><button id="cont">이어서 찍기</button><button id="fin">3D 만들기로</button></div>
+      <button id="newsite" style="margin-top:8px;width:100%">새 현장으로 시작</button></div>` : "";
+    if ($("cont")) { $("cont").onclick = () => startCapture(mode); $("fin").onclick = () => toDone(); $("newsite").onclick = () => { ST.set(null); refreshJobs(); }; }
+  } catch (e) { if (e.message !== "연결 필요") $("conn").textContent = "PC 에 연결할 수 없습니다 — PC 의 앱이 켜져 있는지 확인하세요"; }
+}
+function notify(t) {
+  try { navigator.vibrate && navigator.vibrate([80, 60, 80]); } catch {}
+  try { if ("Notification" in window && Notification.permission === "granted") new Notification(t, {icon: "/m/icon.svg"}); } catch {}
+}
+const esc = (s) => String(s || "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+function defaultName() { const t = new Date(); return `현장 ${t.getMonth() + 1}/${t.getDate()} ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`; }
+
+(async function init() {
+  if (location.search.includes("t=")) history.replaceState(null, "", "/m");  // 연결 코드는 쿠키로 기억 — 주소창에서 지움
+  $("name").value = defaultName();
+  if (!window.isSecureContext || !navigator.mediaDevices) { $("secwarn").hidden = false; $("bPhoto").disabled = $("bVideo").disabled = true; }
+  if ("serviceWorker" in navigator && window.isSecureContext) navigator.serviceWorker.register("/m/sw.js", {scope: "/m"}).catch(() => {});
+  show("home");
+  await refreshJobs(); pump();
+  setInterval(() => { if (!$("home").hidden) refreshJobs(); }, 5000);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { pump(); refreshJobs(); } });
+})();
+</script>
+</body>
+</html>

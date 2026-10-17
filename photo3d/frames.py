@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import json
 from pathlib import Path
 
 import cv2
@@ -46,8 +47,22 @@ def _has_marker(path: Path) -> bool:
     return ids is not None
 
 
+def _sidecar_gps(path: Path):
+    """폰 앱이 함께 올린 _gps.json(사진 이름 → [위도, 경도, 고도]) — 화면 촬영 사진엔 EXIF 가 없다"""
+    f = path.parent / "_gps.json"
+    try:
+        v = json.loads(f.read_text(encoding="utf-8")).get(path.name) if f.exists() else None
+        return tuple(float(x) for x in v) if v else None
+    except Exception:
+        return None
+
+
 def exif_gps(path: Path):
-    """사진 EXIF 의 GPS(위도, 경도, 고도) — 없으면 None"""
+    """사진 EXIF 의 GPS(위도, 경도, 고도) — 없으면 폰 앱 GPS 파일, 그것도 없으면 None"""
+    return _exif_gps(path) or _sidecar_gps(path)
+
+
+def _exif_gps(path: Path):
     try:
         from PIL import Image
         ex = Image.open(path).getexif()

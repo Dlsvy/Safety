@@ -1,0 +1,12 @@
+{
+  "name": "현장 3D 촬영",
+  "short_name": "현장3D",
+  "description": "현장을 찍으면 PC 로 바로 올라가 3D 가 만들어집니다",
+  "start_url": "/m",
+  "scope": "/m",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#151719",
+  "theme_color": "#151719",
+  "icons": [{"src": "/m/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}]
+}

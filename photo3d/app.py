@@ -11,6 +11,7 @@ import json
 import os
 import queue
 import re
+import secrets
 import shutil
 import socket
 import subprocess
@@ -893,6 +894,44 @@ class Handler(BaseHTTPRequestHandler):
             with open(JOBS.parent / "app.log", "a", encoding="utf-8") as f:
                 f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + self.requestline + "\n" + traceback.format_exc())
 
+    # ── 폰 앱 짝맞춤: PC 밖(와이파이·터널)에서 오는 요청은 토큰이 있어야 받는다 ──
+    _OPEN = ("/m", "/m/", "/m/manifest.webmanifest", "/m/sw.js", "/m/icon.svg")
+
+    def _is_local(self) -> bool:
+        """이 PC 에서 직접 온 요청만 True — 터널(cloudflared)은 localhost 로 들어오므로 전달 헤더로 가려낸다"""
+        if self.client_address[0] not in ("127.0.0.1", "::1"):
+            return False
+        return not any(self.headers.get(h) for h in ("Cf-Connecting-Ip", "Cf-Ray", "X-Forwarded-For"))
+
+    def _gate(self, p: str, q: dict) -> bool:
+        """막았으면 True(응답까지 보냄). ?t=토큰 으로 들어오면 쿠키로 기억"""
+        if self._is_local():
+            return False
+        from . import mobile
+        tok = mobile.token(DATA)
+        t = (q.get("t") or [""])[0]
+        if t and secrets.compare_digest(t, tok):
+            self._set_cookie = f"p3d={tok}; Path=/; Max-Age=31536000; SameSite=Lax"
+            return False
+        ck = self.headers.get("Cookie", "") or ""
+        got = next((c.split("=", 1)[1] for c in (x.strip() for x in ck.split(";")) if c.startswith("p3d=")), "")
+        hdr = self.headers.get("X-P3D-Token", "") or ""
+        if (got and secrets.compare_digest(got, tok)) or (hdr and secrets.compare_digest(hdr, tok)) or p in self._OPEN:
+            return False
+        self._json({"error": "PC 화면의 '폰 연결' QR 코드를 폰으로 찍어 연결하세요", "need_pair": True}, 401)
+        return True
+
+    def end_headers(self):
+        xh = getattr(self, "_xh", None)
+        if xh:
+            self.send_header(*xh)
+            self._xh = None
+        c = getattr(self, "_set_cookie", None)
+        if c:
+            self.send_header("Set-Cookie", c)
+            self._set_cookie = None
+        super().end_headers()
+
     def _json(self, obj, code=200):
         b = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
@@ -956,9 +995,41 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         p = unquote(u.path)
+        if self._gate(p, parse_qs(u.query)):
+            return
         try:
             if p in ("/", "/index.html"):
                 return self._file(WEB / "index.html")
+            if p in ("/m", "/m/"):  # 폰 앱(현장 촬영 → 자동 업로드 → 3D)
+                return self._file(WEB / "m.html")
+            m = re.fullmatch(r"/m/(manifest\.webmanifest|sw\.js|icon\.svg)", p)
+            if m:
+                ct = {"manifest.webmanifest": "application/manifest+json", "sw.js": "text/javascript"}.get(m.group(1))
+                if m.group(1) == "sw.js":  # /m/sw.js 가 /m 화면까지 맡도록
+                    self._xh = ("Service-Worker-Allowed", "/")
+                return self._file(WEB / "m" / m.group(1), ct)
+            if p == "/api/mobile/qr":  # 이 PC 에서만: QR 그림(SVG)
+                if not self._is_local():
+                    return self._json({"error": "PC 에서만"}, 403)
+                from . import mobile
+                svg = mobile.qr_svg(parse_qs(u.query).get("u", [""])[0][:400])
+                if svg is None:
+                    return self._json({"error": "QR 도구 설치 실패"}, 500)
+                self.send_response(200)
+                self.send_header("Content-Type", "image/svg+xml")
+                self.send_header("Content-Length", str(len(svg)))
+                self.end_headers()
+                self.wfile.write(svg)
+                return
+            if p == "/api/mobile/info":  # PC 화면의 '폰 연결' QR 용(이 PC 에서만)
+                if not self._is_local():
+                    return self._json({"error": "PC 에서만"}, 403)
+                from . import mobile
+                port = int(os.environ.get("PHOTO3D_PORT", "8765"))
+                ips = [u.split("//")[1].split(":")[0] for u in lan_urls(port)]
+                return self._json({"token": mobile.token(DATA), "tunnel": mobile.TUNNEL,
+                                   "https": [f"https://{i}:{_HTTPS['port']}" for i in ips] if _HTTPS["port"] else [],
+                                   "http": lan_urls(port)})
             if p == "/api/gpu":
                 from . import gpu
                 g = gpu.query()
@@ -1076,17 +1147,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         p = unquote(urlparse(self.path).path)
+        if self._gate(p, {}):
+            return
         try:
             m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/open", p)
             if m:  # 이 PC 에서만: 결과 폴더를 탐색기로 열기(내려받기가 안 될 때 바로 복사)
-                if self.client_address[0] not in ("127.0.0.1", "::1"):
+                if not self._is_local():
                     return self._json({"error": "PC 에서만 쓸 수 있습니다"}, 403)
                 d = job_dir(m.group(1)) / "out"
                 if os.name == "nt":
                     os.startfile(str(d))  # noqa: S606
                 return self._json({"path": str(d)})
             if p == "/api/gpu/tune":  # 이 PC 에서만: 관리자 확인 창을 띄워 GPU 최적 설정(scripts/gpu_tune.ps1)
-                if self.client_address[0] not in ("127.0.0.1", "::1"):
+                if not self._is_local():
                     return self._json({"error": "PC 에서만 쓸 수 있습니다"}, 403)
                 if os.name != "nt":
                     return self._json({"error": "윈도우 PC 에서만 필요한 설정입니다"}, 400)
@@ -1095,8 +1168,17 @@ class Handler(BaseHTTPRequestHandler):
                                   f"Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File \"{ps1}\"'"],
                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 return self._json({"ok": True})
+            if p == "/api/mobile/tunnel":  # 현장(인터넷)에서도 폰으로 접속 — 켜기/끄기(이 PC 에서만)
+                if not self._is_local():
+                    return self._json({"error": "PC 에서만 쓸 수 있습니다"}, 403)
+                from . import mobile
+                if self._body_json().get("on"):
+                    mobile.tunnel_start(ROOT, int(os.environ.get("PHOTO3D_PORT", "8765")))
+                else:
+                    mobile.tunnel_stop()
+                return self._json({"tunnel": mobile.TUNNEL})
             if p == "/api/browse":  # 이 PC 에서만: 윈도우 폴더 선택 창
-                if self.client_address[0] not in ("127.0.0.1", "::1"):
+                if not self._is_local():
                     return self._json({"error": "PC 에서만 쓸 수 있습니다"}, 403)
                 code = ("import tkinter as t, tkinter.filedialog as f; r=t.Tk(); r.withdraw(); "
                         "r.attributes('-topmost', True); print(f.askdirectory(title='사진 폴더 고르기') or '')")
@@ -1169,6 +1251,11 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"error": "이미 처리 중이거나 완료"}, 409)
                 if not job.get("local_path") and not any((job_dir(job["id"]) / "input").iterdir()):
                     return self._json({"error": "올린 파일이 없습니다"}, 400)
+                b = self._body_json()  # 폰 앱: 업로드가 끝난 뒤 고른 품질·방식
+                if b.get("mode") in ("fast", "best"):
+                    job["mode"] = b["mode"]
+                if b.get("kind") in ("splat", "pg", "fuse"):
+                    job["kind"] = b["kind"]
                 job.update(status="queued", error=None)
                 save_job(job)
                 _queue.put(job["id"])
@@ -1179,6 +1266,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         u = urlparse(self.path)
+        if self._gate(unquote(u.path), {}):
+            return
         ma = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/annotations", unquote(u.path))
         if ma:  # 현장 표시(거리·반경·구역·위험) 저장 → 유니티가 같은 좌표로 읽음
             try:
@@ -1188,6 +1277,18 @@ class Handler(BaseHTTPRequestHandler):
                 f = job_dir(ma.group(1)) / "out" / "annotations.json"
                 f.write_text(json.dumps(b, ensure_ascii=False, indent=1), encoding="utf-8")
                 return self._json({"ok": True, "n": len(b["items"])})
+            except KeyError:
+                return self._json({"error": "작업 없음"}, 404)
+        mg = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/gps", unquote(u.path))
+        if mg:  # 폰 앱: 사진별 GPS(위도, 경도, 고도) — 화면에서 찍은 사진은 EXIF 가 없어 따로 받는다
+            try:
+                b = self._body_json()
+                f = job_dir(mg.group(1)) / "input" / "_gps.json"
+                cur = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+                cur.update({Path(k).name: v for k, v in b.items()
+                            if isinstance(v, list) and len(v) == 3 and all(isinstance(x, (int, float)) for x in v)})
+                f.write_text(json.dumps(cur), encoding="utf-8")
+                return self._json({"ok": True, "n": len(cur)})
             except KeyError:
                 return self._json({"error": "작업 없음"}, 404)
         m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/files", unquote(u.path))
@@ -1205,7 +1306,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "작업 없음"}, 404)
         safe = re.sub(r"[^\w.\-]", "_", name)
         n = int(self.headers.get("Content-Length", 0) or 0)
-        with open(d / safe, "wb") as f:
+        # 이어 올리기(폰 앱: 큰 동영상을 조각으로, 끊기면 이어서) — ?offset= 이 지금 크기와 같을 때만 덧붙임
+        off = int(parse_qs(u.query).get("offset", ["0"])[0] or 0)
+        have = (d / safe).stat().st_size if (d / safe).exists() else 0
+        if off and off != have:
+            self.rfile.read(n)
+            return self._json({"error": "이어 올리기 위치가 다름", "size": have}, 409)
+        with open(d / safe, "ab" if off else "wb") as f:
             left = n
             while left > 0:
                 chunk = self.rfile.read(min(left, 1 << 20))
@@ -1213,9 +1320,11 @@ class Handler(BaseHTTPRequestHandler):
                     break
                 f.write(chunk)
                 left -= len(chunk)
-        return self._json({"ok": True, "name": safe, "bytes": n})
+        return self._json({"ok": True, "name": safe, "bytes": n, "size": (d / safe).stat().st_size})
 
     def do_DELETE(self):
+        if self._gate(unquote(urlparse(self.path).path), {}):
+            return
         m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})", unquote(urlparse(self.path).path))
         if not m:
             return self._json({"error": "없는 경로"}, 404)
@@ -1257,6 +1366,7 @@ def _no_quickedit() -> None:
 
 
 _PRIOR = {"state": "확인 전", "msg": ""}
+_HTTPS = {"port": None}  # 폰 앱용 같은 와이파이 HTTPS(카메라는 보안 연결에서만 열림)
 
 
 def prepare_prior() -> None:
@@ -1309,8 +1419,9 @@ def main():
     threading.Thread(target=prepare_prior, daemon=True).start()
     srv = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"photo3d 앱: http://localhost:{port}")
-    for u in lan_urls(port):
-        print(f"  같은 와이파이의 폰에서: {u}")
+    from . import mobile
+    _HTTPS["port"] = mobile.serve_https(Handler, DATA, [u.split("//")[1].split(":")[0] for u in lan_urls(port)])
+    print("  폰 앱: PC 화면 오른쪽 위 '폰 연결' 버튼의 QR 코드를 폰 카메라로 찍으세요")
     print("  (끄려면 이 창을 닫으세요)")
     if os.environ.get("PHOTO3D_NO_BROWSER") != "1":
         try:
