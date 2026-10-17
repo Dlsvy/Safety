@@ -6,3 +6,7 @@ out/
 docs/*_[0-9].png
 app_data/
 data/
+# OpenMVS 실행 로그(작업 폴더 밖에서 돌리면 저장소에 남음)
+/*Mesh-*.log
+/*PointCloud-*.log
+/InterfaceCOLMAP-*.log
