@@ -44,6 +44,7 @@ button:disabled{opacity:.45}
 #ovl{position:absolute;left:14px;right:14px;top:calc(56px + env(safe-area-inset-top));height:10px;background:#0008;border-radius:5px;overflow:hidden}
 #ovl>i{display:block;height:100%;width:0;background:var(--ok);transition:width .15s}
 #ring{width:64px;height:64px}
+#aim{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 #shut{width:78px;height:78px;border-radius:50%;border:5px solid #fff;background:#fff3;min-height:0;padding:0}
 #shut.rec{background:#e33;border-color:#fff}
 #flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;transition:opacity .25s}
@@ -78,13 +79,15 @@ button:disabled{opacity:.45}
   <div class="muted">· 건물 둘레를 <b>천천히 걸으며</b> 한 바퀴(높은 건물은 두 바퀴: 멀리서 한 번, 가까이서 한 번)<br>
     · 제자리에서 돌지 말고 <b>옆으로 걸으세요</b> — 앱이 겹침 70~80%마다 알아서 찍습니다<br>
     · 흔들리거나 흐린 순간은 앱이 건너뜁니다 · 역광·유리·물웅덩이는 피하기<br>
-    · <b>공간 스캔</b>: 한 곳에 서서 폰을 몸 앞으로 내밀고 몸을 천천히 돌리면 12장이 자동으로 찍힙니다 →
-      1.5~2m 옮겨 다시 한 바퀴. 방·복도·현장 내부처럼 둘레를 돌 수 없는 곳에 씁니다</div>
+    · <b>공간 스캔</b>(매터포트 방식): 한 곳에 서서 화면의 흰 점을 가운데 원에 맞추면 자동으로 찍힙니다
+      (가운데·위·아래 줄 28장). 폰을 중심으로 돌고 팔꿈치는 몸에 붙이기 → 이전 위치가 보이는 곳으로 1.5~2m 옮겨 반복.
+      방·복도·현장 내부처럼 둘레를 돌 수 없는 곳에 씁니다. 거울·유리 정면은 피하세요</div>
 </main>
 
 <section id="cam" hidden>
   <video id="vid" playsinline muted autoplay></video>
   <div id="frame"></div>
+  <svg id="aim" hidden></svg>
   <div id="flash"></div>
   <div class="hud top">
     <span class="pill" id="cnt">0장</span>
@@ -98,6 +101,7 @@ button:disabled{opacity:.45}
   <div id="guide">카메라 준비 중…</div>
   <div class="hud bot">
     <button class="small on" id="autoB">자동 ON</button>
+    <button class="small on" id="rowsB" hidden>바닥·천장 포함</button>
     <button id="shut" aria-label="찍기"></button>
     <button class="small" id="endB">완료</button>
   </div>
@@ -232,7 +236,7 @@ async function autoStart() {
 }
 
 /* ── 센서: 흔들림(자이로)·방향(나침반)·GPS ── */
-const SEN = {rate: 0, heading: null, gps: null, acc: null};
+const SEN = {rate: 0, heading: null, gps: null, acc: null, ori: null};
 function sensorsOn() {
   addEventListener("devicemotion", (e) => {
     const r = e.rotationRate; if (!r) return;
@@ -240,6 +244,7 @@ function sensorsOn() {
     SEN.rate = SEN.rate * 0.6 + v * 0.4;
   });
   const ori = (e) => {
+    if (typeof e.alpha === "number" && typeof e.beta === "number") SEN.ori = {a: e.alpha, b: e.beta, g: e.gamma || 0};
     if (typeof e.webkitCompassHeading === "number") SEN.heading = e.webkitCompassHeading;
     else if (e.absolute && typeof e.alpha === "number") SEN.heading = (360 - e.alpha) % 360;
   };
@@ -394,38 +399,83 @@ async function shoot(why, tag) {
   enqueue(blob, nm, gps);
   if (why === "빨랐음") guide("조금 빨랐어요 — 천천히", "", "var(--bad)");
 }
-/* ── 공간 스캔(메타포트 방식): 한 위치에서 제자리 한 바퀴(30°마다 12장) → 1.5~2m 이동 → 반복 ──
-   폰을 몸 앞으로 내밀고(반지름 30~50cm) 몸을 돌리면 같은 위치 안에서도 시점이 조금씩 달라져 깊이가 잡히고,
-   위치 사이 1.5~2m 이동이 큰 시차를 준다. 나침반이 없으면 화면 이동량(겹침 70%)으로 대신한다. */
-const SP = {n: 12, spot: 1, done: new Set(), wait: false, cnt: 0};
+/* ── 공간 스캔(매터포트 방식) ──
+   매터포트 폰 촬영: 한 지점에서 폰을 중심으로 제자리 360°(일반 렌즈 위·가운데·아래 3줄 × 6방향 = 18장),
+   화면의 흰 점을 가운데 원에 맞추면 찍히고 다음 점이 나온다. 팔꿈치를 붙이고 가만히, 지점 사이는 이전 지점이 보이는 곳으로.
+   우리는 사진끼리 겹쳐야 3D 가 되므로 더 촘촘하게: 가운데 줄 30°마다 12장 + (바닥·천장 포함 시) 위·아래 ±40° 줄 각 8장 = 28장.
+   기울기 센서(deviceorientation)로 목표 방향을 화면에 그린다. 센서가 없으면 화면 이동량(겹침 70%)으로 가운데 줄만. */
+const SP = {spot: 1, wait: false, full: true, yaw0: null, done: new Set(), cnt: 0};
+const D2R = Math.PI / 180;
+const spRows = () => SP.full ? [[0, 12], [40, 8], [-40, 8]] : [[0, 12]];
+const spTotal = () => spRows().reduce((a, [, n]) => a + n, 0);
+function spTargets() {
+  const t = [];
+  spRows().forEach(([p, n], r) => { for (let i = 0; i < n; i++) t.push({id: r * 100 + i, r, p, y: (SP.yaw0 + i * 360 / n) % 360}); });
+  return t;
+}
+function devFrame() {  // W3C DeviceOrientation: 기기 좌표(x 오른쪽, y 화면 위, z 화면 밖) → 지구 좌표(동·북·위)
+  if (!SEN.ori) return null;
+  const a = SEN.ori.a * D2R, b = SEN.ori.b * D2R, g = SEN.ori.g * D2R;
+  const ca = Math.cos(a), sa = Math.sin(a), cb = Math.cos(b), sb = Math.sin(b), cg = Math.cos(g), sg = Math.sin(g);
+  const r = [ca * cg - sa * sb * sg, cg * sa + ca * sb * sg, -cb * sg];
+  const u = [-cb * sa, ca * cb, sb];
+  const z = [ca * sg + cg * sa * sb, sa * sg - ca * cg * sb, cb * cg];
+  return {r, u, f: [-z[0], -z[1], -z[2]]};  // 뒷면 카메라는 -z 를 본다
+}
+const yawOf = (v) => (Math.atan2(v[0], v[1]) / D2R + 360) % 360;
+const dirOf = (y, p) => [Math.cos(p * D2R) * Math.sin(y * D2R), Math.cos(p * D2R) * Math.cos(y * D2R), Math.sin(p * D2R)];
+const dot3 = (x, y) => x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
+function spotDone() {
+  SP.wait = true; SP.spot++; SP.cnt = 0; SP.done.clear(); SP.yaw0 = null; $("aim").innerHTML = "";
+  try { navigator.vibrate && navigator.vibrate([60, 40, 60, 40, 120]); } catch {}
+}
+function drawAim(fr, next, T) {  // 가운데 원(고정) + 다음 목표 흰 점 + 남은 목표(흐리게)·찍은 곳(초록)
+  const el = $("aim"), W = el.clientWidth, H = el.clientHeight, F = (W / 2) / Math.tan(25 * D2R);
+  const proj = (d) => { const z = dot3(d, fr.f); if (z < 0.2) return null; return [W / 2 + F * dot3(d, fr.r) / z, H / 2 - F * dot3(d, fr.u) / z]; };
+  let h = `<circle cx="${W / 2}" cy="${H / 2}" r="30" fill="none" stroke="#fff" stroke-width="4"/>`;
+  for (const t of spTargets()) {
+    const q = proj(dirOf(t.y, t.p)); if (!q) continue;
+    const done = SP.done.has(t.id), isNext = next && t.id === next.id;
+    h += `<circle cx="${q[0].toFixed(0)}" cy="${q[1].toFixed(0)}" r="${isNext ? 16 : 7}" fill="${done ? "#5fbf86" : isNext ? "#fff" : "#ffffff55"}"/>`;
+  }
+  const qn = next && proj(dirOf(next.y, next.p));
+  if (next && (!qn || qn[0] < 20 || qn[0] > W - 20 || qn[1] < 20 || qn[1] > H - 20)) {  // 다음 점이 화면 밖: 방향 화살표
+    const d = dirOf(next.y, next.p), ang = Math.atan2(-dot3(d, fr.u), dot3(d, fr.r));
+    const x = W / 2 + Math.cos(ang) * W * 0.35, y = H / 2 + Math.sin(ang) * H * 0.3;
+    h += `<text x="${x.toFixed(0)}" y="${y.toFixed(0)}" fill="#fff" font-size="44" font-weight="800" text-anchor="middle" transform="rotate(${(ang / D2R + 90).toFixed(0)} ${x.toFixed(0)} ${y.toFixed(0)})">↑</text>`;
+  }
+  el.innerHTML = h;
+}
 function spotTick(now, steady, sharpOk, shaky) {
-  if (SP.wait) return guide(`위치 ${SP.spot - 1} 완료 ✓`, "1.5~2m 옮긴 뒤 아래 찍기 버튼을 한 번 누르세요 (다 찍었으면 '완료')", "var(--accent)");
+  const tag = `s${String(SP.spot).padStart(2, "0")}`;
+  if (SP.wait) return guide(`위치 ${SP.spot - 1} 완료 ✓`, "이전 위치가 보이는 곳으로 1.5~2m 옮긴 뒤 찍기 버튼 (다 찍었으면 '완료')", "var(--accent)");
+  const fr = devFrame();
+  if (!fr) {  // 기울기 센서 없음: 가운데 줄만, 옆으로 70% 겹침마다
+    const ready = steady && sharpOk && now - A.lastShot > 500;
+    if (SP.cnt === 0 ? ready : (Math.abs(A.cx) >= 0.3 && ready)) { SP.cnt++; shoot("", tag); }
+    if (SP.cnt >= 12) return spotDone();
+    return guide(`위치 ${SP.spot} · ${SP.cnt}/12장`, "폰을 중심으로 몸을 오른쪽으로 천천히 돌리세요");
+  }
+  if (Math.abs(screen.orientation ? screen.orientation.angle : 0) % 180 === 90) return guide("폰을 세로로 들어 주세요", "", "var(--bad)");
+  if (SP.yaw0 === null) SP.yaw0 = yawOf(fr.f);  // 지점의 첫 방향 = 기준
+  const T = spTargets().filter((t) => !SP.done.has(t.id));
+  if (!T.length) return spotDone();
+  const row = Math.min(...T.map((t) => t.r));  // 가운데 줄 → 위 줄 → 아래 줄
+  let next = null, best = 1e9;
+  for (const t of T.filter((t) => t.r === row)) { const ang = Math.acos(Math.min(1, dot3(dirOf(t.y, t.p), fr.f))) / D2R; if (ang < best) { best = ang; next = t; } }
+  drawAim(fr, next, T);
   if (shaky) return guide("천천히 — 잠깐 멈추세요", "멈추면 자동으로 찍습니다", "var(--bad)");
-  if (!sharpOk) return guide("초점 맞추는 중…", "", "#f2b70588");
-  const ready = steady && now - A.lastShot > 500;
-  if (SEN.heading === null) {  // 나침반 없음: 옆으로 70% 겹침마다
-    if (SP.cnt === 0 ? ready : (Math.abs(A.cx) >= 0.3 && ready)) { SP.cnt++; shoot("", `s${String(SP.spot).padStart(2, "0")}`); }
-  } else {
-    const step = 360 / SP.n, idx = Math.round(SEN.heading / step) % SP.n;
-    const off = Math.abs(((SEN.heading - idx * step) % 360 + 540) % 360 - 180);
-    if (!SP.done.has(idx) && off < 7 && ready) { SP.done.add(idx); SP.cnt++; shoot("", `s${String(SP.spot).padStart(2, "0")}`); }
-  }
-  if (SP.cnt >= SP.n) {
-    SP.wait = true; SP.spot++; SP.cnt = 0; SP.done.clear();
-    try { navigator.vibrate && navigator.vibrate([60, 40, 60, 40, 120]); } catch {}
-    return;
-  }
-  guide(`위치 ${SP.spot} · ${SP.cnt}/${SP.n}장`, "폰을 몸 앞으로 내밀고 몸을 오른쪽으로 천천히 돌리세요 — 칸이 다 차면 다음 위치로");
-  drawRing();
+  if (best < 4 && sharpOk && steady && now - A.lastShot > 500) { SP.done.add(next.id); SP.cnt++; shoot("", tag); return; }
+  const rowName = ["가운데", "위쪽", "아래쪽"][row];
+  guide(`위치 ${SP.spot} · ${SP.cnt}/${spTotal()}장`, `흰 점을 가운데 원에 맞추세요 (${rowName} 줄) — 폰을 중심으로 돌고, 팔꿈치는 몸에 붙이기`);
 }
 function drawRing() {  // 바깥 링: 방향별로 찍은 구간(한 바퀴 진행) — 나침반 없으면 장수만
   const s = $("ring"); let h = "";
-  if (mode === "spot") {  // 공간 스캔: 지금 위치의 12방향 칸 + 지금 향하는 방향
-    for (let i = 0; i < SP.n; i++) {
-      const a = (i * 30 - 90) * Math.PI / 180;
-      h += `<circle cx="${(28 * Math.cos(a)).toFixed(1)}" cy="${(28 * Math.sin(a)).toFixed(1)}" r="4.5" fill="${SP.done.has(i) || (SEN.heading === null && i < SP.cnt) ? "#5fbf86" : "#ffffff40"}"/>`;
-    }
-    if (SEN.heading !== null) { const a = (SEN.heading - 90) * Math.PI / 180; h += `<line x1="0" y1="0" x2="${(20 * Math.cos(a)).toFixed(1)}" y2="${(20 * Math.sin(a)).toFixed(1)}" stroke="#f2b705" stroke-width="3"/>`; }
+  if (mode === "spot") {  // 공간 스캔: 지금 위치에서 찍은 비율 + 위치 번호
+    const tot = spTotal(), fr_ = SP.cnt / tot, a1 = (fr_ * 360 - 90) * D2R;
+    h += `<circle r="28" fill="none" stroke="#ffffff40" stroke-width="7"/>`;
+    if (fr_ > 0) h += fr_ >= 1 ? `<circle r="28" fill="none" stroke="#5fbf86" stroke-width="7"/>`
+      : `<path d="M0 -28 A28 28 0 ${fr_ > 0.5 ? 1 : 0} 1 ${(28 * Math.cos(a1)).toFixed(1)} ${(28 * Math.sin(a1)).toFixed(1)}" stroke="#5fbf86" stroke-width="7" fill="none"/>`;
     h += `<text x="0" y="5" fill="#fff" font-size="14" font-weight="700" text-anchor="middle">${SP.spot}</text>`;
     s.innerHTML = h; return;
   }
@@ -472,7 +522,9 @@ async function startCapture(kind) {
   show("cam"); guide("카메라 준비 중…");
   Object.assign(A, {prev: null, cx: 0, cy: 0, sharpHist: [], lastShot: 0, shots: 0, key: null, steadySince: performance.now()});
   A.bins.fill(0); wbLocked = false;
-  if (kind === "spot" && SP.cnt) SP.cnt = 0, SP.done.clear();  // '더 찍기': 위치 번호는 이어서, 하다 만 한 바퀴는 처음부터
+  if (kind === "spot" && SP.cnt) { SP.cnt = 0; SP.done.clear(); SP.yaw0 = null; }  // '더 찍기': 위치 번호는 이어서, 하다 만 한 바퀴는 처음부터
+  $("aim").hidden = $("rowsB").hidden = kind !== "spot";
+  $("guide").style.top = kind === "spot" ? "16%" : "";  // 공간 스캔: 가운데 원을 가리지 않게 위로
   drawRing();
   $("cnt").textContent = kind === "video" ? "영상 0개" : "0장";
   $("autoB").hidden = kind === "video";
@@ -490,11 +542,16 @@ function stopCapture() {
 $("bPhoto").onclick = () => startCapture("photo");
 $("bHybrid").onclick = () => startCapture("hybrid");
 $("bVideo").onclick = () => startCapture("video");
-$("bSpot").onclick = () => { Object.assign(SP, {spot: 1, done: new Set(), wait: false, cnt: 0}); startCapture("spot"); };
+$("bSpot").onclick = () => { Object.assign(SP, {spot: 1, done: new Set(), wait: false, cnt: 0, yaw0: null}); startCapture("spot"); };
+$("rowsB").onclick = () => {  // 바닥·천장 줄 포함(완전) ↔ 가운데 줄만(간편) — 매터포트의 complete/simple
+  SP.full = !SP.full; $("rowsB").classList.toggle("on", SP.full); $("rowsB").textContent = SP.full ? "바닥·천장 포함" : "가운데 줄만";
+  for (const id of [...SP.done]) if (id >= 100 && !SP.full) { SP.done.delete(id); }
+  SP.cnt = SP.done.size; drawRing();
+};
 $("autoB").onclick = () => { A.auto = !A.auto; $("autoB").textContent = A.auto ? "자동 ON" : "자동 OFF"; $("autoB").classList.toggle("on", A.auto); };
 $("shut").onclick = () => {
   if (mode === "video") { rec ? rec.stop() : startRec(); return; }
-  if (mode === "spot" && SP.wait) { SP.wait = false; A.cx = A.cy = 0; A.lastShot = 0; return; }  // 다음 위치 시작
+  if (mode === "spot" && SP.wait) { SP.wait = false; SP.yaw0 = null; A.cx = A.cy = 0; A.lastShot = 0; return; }  // 다음 위치 시작
   shoot("", mode === "spot" ? `s${String(SP.spot).padStart(2, "0")}` : "");
 };
 $("endB").onclick = async () => { stopCapture(); await sleep(300); toDone(); };
