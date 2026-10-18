@@ -15,16 +15,32 @@ from PIL import Image
 
 
 def main(src: str, dst: str) -> None:
+    import time
     from mapanything.models import MapAnything
     from mapanything.utils.image import load_images
+    t0 = time.time()
     paths = json.load(open(src, encoding="utf-8"))
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     model = MapAnything.from_pretrained("facebook/map-anything-apache").to(dev).eval()  # Apache-2.0 가중치
+    print(f"TIME load {time.time() - t0:.1f}s", flush=True)
     views = load_images(paths)
+    t1 = time.time()
     with torch.no_grad():
         outs = model.infer(views, memory_efficient_inference=True, minibatch_size=1, use_amp=True,
                            amp_dtype="bf16", apply_mask=True, mask_edges=True)
-    res = []
+    print(f"TIME infer {time.time() - t1:.1f}s ({len(paths)} views)", flush=True)
+    res, dense = [], {}
+    for k, (p, v, o) in enumerate(zip(paths, views, outs)):
+        # 조밀 점(세계 좌표·미터)·색·신뢰도·마스크 — 사진이 적어 COLMAP 조밀복원이 거의 실패할 때 대신 쓴다
+        pts = o["pts3d"][0].float().cpu().numpy()
+        msk = o["mask"][0, ..., 0].cpu().numpy() > 0.5 if "mask" in o else np.ones(pts.shape[:2], bool)
+        cf = o["conf"][0].float().cpu().numpy() if "conf" in o else np.ones(pts.shape[:2], np.float32)
+        rgb = (o["img_no_norm"][0].float().cpu().numpy() * 255).clip(0, 255).astype(np.uint8) if "img_no_norm" in o else None
+        dense[f"pts{k}"] = pts.astype(np.float32)
+        dense[f"mask{k}"] = msk
+        dense[f"conf{k}"] = cf.astype(np.float32)
+        if rgb is not None:
+            dense[f"rgb{k}"] = rgb
     for p, v, o in zip(paths, views, outs):
         th, tw = v["img"].shape[-2:]
         W, H = Image.open(p).size
@@ -36,6 +52,7 @@ def main(src: str, dst: str) -> None:
         conf = o.get("conf")
         res.append({"path": p, "name": os.path.basename(p), "W": W, "H": H, "K": Ko.tolist(), "c2w": c2w.tolist(),
                     "conf": float(conf.float().mean()) if conf is not None else None})
+    np.savez_compressed(os.path.splitext(dst)[0] + "_dense.npz", **dense)
     json.dump(res, open(dst, "w", encoding="utf-8"))
     print(f"MapAnything: {len(res)} views")
 

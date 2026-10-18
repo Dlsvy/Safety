@@ -67,6 +67,12 @@ def run(a) -> dict:
             os.environ["PHOTO3D_SPIRULA_CAP"] = str(sp_cap)
             os.environ["PHOTO3D_SPIRULA_STEPS"] = str(sp_steps)
             os.environ["PHOTO3D_SPIRULA_RES"] = "3200"
+        elif a.profile == "instant":  # 아주 빠르게: 형태 확인용 — 30만 개·3천 스텝·학습 1000px(몇 분 안)
+            os.environ["PHOTO3D_SPIRULA_CAP"] = "300000"
+            os.environ["PHOTO3D_SPIRULA_STEPS"] = "3000"
+            os.environ["PHOTO3D_SPIRULA_RES"] = "1000"
+            os.environ["PHOTO3D_SPIRULA_SAVE"] = "1000"
+            os.environ["PHOTO3D_SPIRULA_GEO"] = "0"
         else:  # 빠르게: 더 많이 학습(1만5천 스텝)하되 본 처리 끝난 뒤 최대 5분만 기다리고 마지막 저장본 사용
             os.environ["PHOTO3D_SPIRULA_CAP"] = str(max(1_000_000, cap))
             os.environ["PHOTO3D_SPIRULA_STEPS"] = "7000"
@@ -131,27 +137,35 @@ def run(a) -> dict:
             log(f"  360° 사진/영상에서 원근 사진 {prep['pano_views']}장 생성")
         n_img = len(prep["images"])
         rec = st = None
+        if a.profile == "instant" and n_img > INSTANT_PICK and not prep.get("rig"):
+            n_img = _pick_for_instant(img_dir, work / "images_unused", log)
+        if a.profile == "instant" and n_img <= 15 and not prep.get("rig") and fewshot.find() is not None:
+            fs = fewshot.run(img_dir, work / "fewshot", use_gpu=a.gpu, log=log)  # COLMAP 시도 없이 바로(시간 절약)
+            if fs is not None:
+                rec, st = fs
         mask_dir = Path(a.masks) if a.masks else (Path(prep["mask_dir"]) if prep.get("mask_dir") else None)
-        if mask_dir is None and not a.subject and not prep.get("rig") and os.environ.get("PHOTO3D_NO_DYNMASK") != "1":
+        if rec is None and mask_dir is None and not a.subject and not prep.get("rig") and os.environ.get("PHOTO3D_NO_DYNMASK") != "1":
             from . import dynmask  # 작업자·차량 위 특징점은 카메라 계산에서 뺀다(사람 스캔 모드는 제외)
             mask_dir = dynmask.make(img_dir, work / "masks_dynamic", log=log)
-        try:
-            rec, st = sfm.run_sfm(img_dir, work / "sfm", sequential=prep["sequential"],
-                                  single_camera=prep.get("single_camera", True),
-                                  camera_model=prep.get("camera_model") or "OPENCV",
-                                  camera_params=prep.get("camera_params"), rig=prep.get("rig"),
-                                  mapper=a.mapper, use_gpu=a.gpu,
-                                  colmap_bin=a.colmap_bin, features=a.features,
-                                  mask_dir=mask_dir,
-                                  per_folder=bool(prep.get("per_folder")), refine_pp=a.refine_pp,
-                                  robust=not a.no_robust, max_side=a.max_side,
-                                  max_features=a.max_features, log=log)
-        except Exception as e:
-            if n_img > fewshot.MAX_IMAGES or fewshot.find() is None:
-                raise
-            log(f"  COLMAP 카메라 계산 실패({str(e)[:120]}) → 적은 장수 방식으로")
+        if rec is None:  # 아주 빠르게에서 이미 카메라를 잡았으면 COLMAP 은 건너뛴다
+            try:
+                rec, st = sfm.run_sfm(img_dir, work / "sfm", sequential=prep["sequential"],
+                                      single_camera=prep.get("single_camera", True),
+                                      camera_model=prep.get("camera_model") or "OPENCV",
+                                      camera_params=prep.get("camera_params"), rig=prep.get("rig"),
+                                      mapper=a.mapper, use_gpu=a.gpu,
+                                      colmap_bin=a.colmap_bin, features=a.features,
+                                      mask_dir=mask_dir,
+                                      per_folder=bool(prep.get("per_folder")), refine_pp=a.refine_pp,
+                                      robust=not a.no_robust, max_side=a.max_side,
+                                      max_features=a.max_features, log=log)
+            except Exception as e:
+                if n_img > fewshot.MAX_IMAGES or fewshot.find() is None:
+                    raise
+                log(f"  COLMAP 카메라 계산 실패({str(e)[:120]}) → 적은 장수 방식으로")
         # 사진이 적어(≤40장) COLMAP 이 일부만 연결하면 MapAnything 으로 시작값을 잡아 다시(8장 시험: COLMAP 2/8장 → 8/8장)
-        if n_img <= fewshot.MAX_IMAGES and (st is None or st["images_registered"] < 0.8 * n_img) and not prep.get("rig"):
+        if n_img <= fewshot.MAX_IMAGES and (st is None or st["images_registered"] < 0.8 * n_img) and not prep.get("rig") \
+                and not (st or {}).get("fewshot"):
             fs = fewshot.run(img_dir, work / "fewshot", use_gpu=a.gpu, log=log)
             if fs is not None and (st is None or fs[1]["images_registered"] > st["images_registered"]):
                 rec, st = fs
@@ -221,9 +235,16 @@ def run(a) -> dict:
         except Exception as e:
             log(f"  스플래팅 시작 실패(메쉬 결과는 정상): {e}")
 
+    ai_dense = None
+    if (st or {}).get("fewshot") and rec.num_reg_images() <= 15 and a.dense == "colmap":
+        # 사진이 아주 적으면 COLMAP 조밀복원(여러 사진 일치)이 거의 비어 나온다(8장 45° 간격: 3,584점)
+        # → MapAnything 이 사진마다 예측한 깊이 점을 최종 좌표로 옮겨 대신 쓴다(카메라 위치끼리 Sim3 정합)
+        (work / "dense").mkdir(parents=True, exist_ok=True)
+        ai_dense = fewshot.dense_points(work / "fewshot", rec, work / "ai_dense.ply", log=log)
     res = mvs.densify_and_mesh(rec, img_dir, work, quality=a.quality, engine=a.dense,
-                               colmap_bin=a.colmap_bin, on_dense_ready=on_dense_ready, prior=a.prior,
-                               subject=a.subject, resume=resumed, strict=a.pipeline in ("pg", "fuse"), log=log)
+                               colmap_bin=a.colmap_bin, on_dense_ready=on_dense_ready, prior=a.prior and ai_dense is None,
+                               subject=a.subject, resume=resumed, strict=a.pipeline in ("pg", "fuse"),
+                               dense_points=ai_dense, log=log)
     if a.fill and "fill" not in side and res.get("dense_ply"):  # CPU(OpenMVS) 경로: 콜백 없음 → 지금 시작
         on_dense_ready(work / "dense", res["dense_ply"])
     if a.pipeline == "fuse" and a.splat_steps > 0 and "splat" not in side:
@@ -324,7 +345,7 @@ def run(a) -> dict:
             from . import splat
             # 빠른 모드: 본 처리가 끝난 뒤 최대 5분만 더 기다리고 중간본 사용(최고 품질은 끝까지)
             rep["splat"] = splat.finish_splat(side["splat"], out, log=log,
-                                              max_wait=120 if a.profile == "fast" and a.pipeline != "fuse" else None)
+                                              max_wait=120 if a.profile in ("fast", "instant") and a.pipeline != "fuse" else None)
             rep["splat"]["minutes"] = round((time.time() - side["splat_t0"]) / 60, 1)
             if a.pipeline == "fuse":  # 측정 표면 뒤에 숨은 스플랫 제거 + 메쉬와 일치도
                 from . import fuse
@@ -339,7 +360,7 @@ def run(a) -> dict:
                         # 형태 메쉬: PGSR(평면 가우시안, 설치돼 있으면 — 가장 정확) → 없거나 실패하면 Spirula 메쉬
                         from . import pgsr
                         gm = None
-                        if pgsr.find_pgsr() is not None:
+                        if pgsr.find_pgsr() is not None and a.profile != "instant":
                             gm = pgsr.run(work / "dense", work / "pgsr",
                                           iterations=30000 if a.profile == "gpu-max" else 7000, log=log)
                             if gm is not None:
@@ -369,7 +390,7 @@ def run(a) -> dict:
                     # 보이는 모델: MeshSplatting 불투명 메쉬(설치돼 있을 때 — 빠른 모드는 일정을 1/3 로 당겨 10,000스텝)
                     try:
                         from . import meshsplat
-                        if meshsplat.find_meshsplat() is not None:
+                        if meshsplat.find_meshsplat() is not None and a.profile != "instant":
                             mp = meshsplat.run(work / "dense", work / "meshsplat", log=log,
                                                iterations=10_000 if a.profile == "fast" else meshsplat.ITERATIONS)
                             oi = mp and meshsplat.opaque_model(mp, work / "dense", out / "site_opaque_mesh.glb", log=log)
@@ -377,7 +398,10 @@ def run(a) -> dict:
                                 rep["fuse"]["opaque_mesh"] = oi
                                 # 빠른 모드(10,000스텝) 결과는 삼각형이 흩어져 아직 거칠다(1Family 확인) → 화면 '불투명 모델'
                                 # 로만 보고, 유니티 패키지 보기 모델로는 최적 합성 메쉬를 쓴다
-                                (out / "site_opaque_mesh.preview").write_text("fast", encoding="utf-8")                                     if a.profile == "fast" else (out / "site_opaque_mesh.preview").unlink(missing_ok=True)
+                                if a.profile == "fast":
+                                    (out / "site_opaque_mesh.preview").write_text("fast", encoding="utf-8")
+                                else:
+                                    (out / "site_opaque_mesh.preview").unlink(missing_ok=True)
                     except Exception as e:
                         log(f"  불투명 모델 생략: {e}")
                     rep["splat"]["splats"] = fi["after"]
@@ -413,6 +437,28 @@ def run(a) -> dict:
         log(f"  유니티 패키지 생략: {e}")
     log(f"완료 — 등급 {rep['grade']['grade']}: {rep['grade']['reason']}")
     return rep
+
+
+INSTANT_PICK = 12  # 아주 빠르게: 사진이 많아도 이만큼만 골라 쓴다(MapAnything 한 번에, 8GB VRAM 에서 1~3분)
+
+
+def _pick_for_instant(img_dir: Path, spare: Path, log=print) -> int:
+    """아주 빠르게: 찍은 순서(이름 순)로 INSTANT_PICK 구간을 나누고 구간마다 가장 선명한 사진 한 장을 고른다
+    → 흔들린 사진은 빠지고 현장을 고르게 덮는다. 나머지는 spare 로 옮겨 둔다(지우지 않음). 남은 장수를 돌려준다."""
+    import shutil
+    from . import frames
+    imgs = sorted(p for p in img_dir.iterdir() if p.suffix.lower() in (".jpg", ".jpeg", ".png"))
+    if len(imgs) <= INSTANT_PICK:
+        return len(imgs)
+    sc = np.array([frames.sharpness(p) for p in imgs])
+    edges = np.linspace(0, len(imgs), INSTANT_PICK + 1).round().astype(int)
+    keep = {int(lo + np.argmax(sc[lo:hi])) for lo, hi in zip(edges[:-1], edges[1:]) if hi > lo}
+    spare.mkdir(parents=True, exist_ok=True)
+    for i, p in enumerate(imgs):
+        if i not in keep:
+            shutil.move(str(p), spare / p.name)
+    log(f"  아주 빠르게: 사진 {len(imgs)}장 중 고르게 퍼진 선명한 {len(keep)}장만 사용(나머지는 images_unused)")
+    return len(keep)
 
 
 def grade(rep: dict) -> dict:
@@ -493,7 +539,7 @@ def main(argv=None):
                    help="강건 모드 끔(기본 켬: 반복무늬 오등록 방지, 실사 정확도 손실 없음)")
     r.add_argument("--refine-pp", action="store_true",
                    help="광학중심까지 보정(실사 벤치마크: 장면 따라 -30%%~+8%% — 기본 끔)")
-    r.add_argument("--profile", choices=["default", "gpu-max", "fast"], default="default",
+    r.add_argument("--profile", choices=["default", "gpu-max", "fast", "instant"], default="default",
                    help="fast: GPU 로 3~4분 미리보기(1600px 조밀복원·정제 생략) / gpu-max: 원본 해상도·GPU 특징점/번들조정/조밀복원·ultra 품질 (NVIDIA + CUDA COLMAP 필요)")
     r.add_argument("--dense", choices=["openmvs", "colmap"], default="openmvs",
                    help="조밀복원 엔진: openmvs(CPU 가능) / colmap(PatchMatch, CUDA GPU 필요)")
@@ -541,6 +587,20 @@ def main(argv=None):
             a.collider_faces = 300_000
         if not a.colmap_bin:
             print("경고: --colmap-bin(CUDA COLMAP)이 없어 특징점·조밀복원은 CPU 로 돈다")
+    if a.cmd == "run" and a.profile == "instant":
+        # 아주 빠르게 = 사진 10장 안팎으로 몇 분 안에 형태 확인: 15장 이하면 COLMAP 대신 MapAnything 으로 카메라,
+        # 1600px 조밀복원, 깊이 보조·구멍 메우기·PGSR·MeshSplatting 생략, 스플랫 3천 스텝
+        a.gpu = True
+        if a.max_side == 3200:
+            a.max_side = 1600
+        a.fill = False
+        a.prior = False
+        if a.max_features == 12000:
+            a.max_features = 8000
+        if a.quality == "medium":
+            a.quality = "draft"
+        if a.dense == "openmvs" and a.colmap_bin:
+            a.dense = "colmap"
     if a.cmd == "run" and a.profile == "fast":
         # 빠르게 = 프로토타입(목표 5~10분): 해상도 1600, 구멍 메우기(CPU 별도 처리) 생략, 텍스처 4096,
         # 스플랫 7천 스텝·표면 방향 지도 생략·본 처리 후 최대 2분 대기
@@ -574,7 +634,7 @@ def main(argv=None):
     if a.cmd == "run" and a.splat_aa:
         os.environ["PHOTO3D_SPLAT_MIP"] = "1"
     if a.cmd == "run" and a.splat_steps < 0:
-        a.splat_steps = {"fast": 7000, "gpu-max": 30000}.get(a.profile, 0)
+        a.splat_steps = {"instant": 3000, "fast": 7000, "gpu-max": 30000}.get(a.profile, 0)
     if a.cmd == "run" and not a.inputs and not a.from_colmap:
         ap.error("사진/동영상 입력 또는 --from-colmap 이 필요합니다")
     if a.cmd == "fill-stage":

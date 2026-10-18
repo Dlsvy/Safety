@@ -425,7 +425,11 @@ DEFAULT_SPI = {"fast": {"1": 0.5, "2": 1.5, "3": 0.2, "4": 10.0, "5": 3.0},
                "pg-best": {"1": 0.8, "2": 3.0, "3": 0.3, "4": 35.0, "5": 6.0},
                # 통합: 포토그래메트리 다음 그 메쉬로 맞춘 스플랫 학습을 끝까지 기다림
                "fuse-fast": {"1": 0.6, "2": 2.0, "3": 0.2, "4": 14.0, "5": 12.0},
-               "fuse-best": {"1": 0.8, "2": 3.0, "3": 0.3, "4": 35.0, "5": 30.0}}
+               "fuse-best": {"1": 0.8, "2": 3.0, "3": 0.3, "4": 35.0, "5": 30.0},
+               # 아주 빠르게(사진 10장 안팎): 카메라는 MapAnything 한 번(장당 몇 초), 조밀복원 1600px, 스플랫 3천 스텝
+               "instant": {"1": 0.5, "2": 8.0, "3": 0.2, "4": 12.0, "5": 10.0},
+               "pg-instant": {"1": 0.5, "2": 8.0, "3": 0.2, "4": 12.0, "5": 2.0},
+               "fuse-instant": {"1": 0.5, "2": 8.0, "3": 0.2, "4": 12.0, "5": 10.0}}
 
 
 def _mkey(job: dict) -> str:
@@ -643,7 +647,7 @@ def run_job(jid: str) -> None:
         env["OPENMVS_BIN"] = tools["openmvs"]
     env["PYTHONIOENCODING"] = "utf-8"
     src = job.get("local_path") or str(d / "input")
-    profile = "gpu-max" if job.get("mode") == "best" else "fast"
+    profile = {"best": "gpu-max", "instant": "instant"}.get(job.get("mode"), "fast")
     cmd = [sys.executable, "-m", "photo3d", "run", src, "--profile", profile, "--out", str(d / "out"),
            "--name", job.get("name") or job["id"]]
     if job.get("kind") in ("pg", "fuse"):
@@ -1238,7 +1242,7 @@ class Handler(BaseHTTPRequestHandler):
                 job = {"id": jid, "name": (b.get("name") or "현장").strip()[:60], "status": "uploading",
                        "created": time.time(), "local_path": lp or None,
                        "scale": b.get("scale") or None, "marker_size": b.get("marker_size") or None,
-                       "mode": "best" if b.get("mode") == "best" else "fast", "subject": bool(b.get("subject")),
+                       "mode": b.get("mode") if b.get("mode") in ("best", "instant") else "fast", "subject": bool(b.get("subject")),
                        "kind": b.get("kind") if b.get("kind") in ("pg", "fuse") else "splat"}
                 save_job(job)
                 return self._json(job, 201)
@@ -1269,7 +1273,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not job.get("local_path") and not any((job_dir(job["id"]) / "input").iterdir()):
                     return self._json({"error": "올린 파일이 없습니다"}, 400)
                 b = self._body_json()  # 폰 앱: 업로드가 끝난 뒤 고른 품질·방식
-                if b.get("mode") in ("fast", "best"):
+                if b.get("mode") in ("fast", "best", "instant"):
                     job["mode"] = b["mode"]
                 if b.get("kind") in ("splat", "pg", "fuse"):
                     job["kind"] = b["kind"]

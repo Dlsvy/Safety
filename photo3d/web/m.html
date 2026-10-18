@@ -113,6 +113,8 @@ button:disabled{opacity:.45}
     <span class="muted">측정 메쉬 + 실사 + 불투명 유니티 모델 · PC 에서 약 1~3시간</span></span></label>
   <label class="opt"><input type="radio" name="q" value="fast"><span><b>빠른 미리보기</b><br>
     <span class="muted">찍은 상태 확인용 · 약 10~30분</span></span></label>
+  <label class="opt"><input type="radio" name="q" value="instant"><span><b>아주 빠르게</b><br>
+    <span class="muted">선명한 12장만 골라 형태 확인 · 약 3~7분 · 크기는 AI 추정</span></span></label>
   <button class="big primary" id="go">3D 만들기</button>
   <div class="muted" id="goMsg">업로드가 끝나면 자동으로 시작합니다. 앱을 닫아도 이미 올라간 사진은 PC 에 남습니다.</div>
   <div class="row"><button id="more">더 찍기</button><button id="home2">처음으로</button></div>
@@ -505,6 +507,8 @@ function toDone() {
   if (mode === "spot" && SP.spot - 1 < 2) warn.push("공간 스캔은 위치 2곳 이상이어야 깊이가 잡힙니다 — <b>더 찍기</b>로 1.5~2m 옮겨 한 바퀴 더");
   if (mode !== "video" && mode !== "spot" && SEN.heading !== null && cov < 18 && n >= 20) warn.push(`둘레의 ${Math.round(100 * cov / 24)}% 만 찍었습니다. 한 바퀴를 다 돌면 빈 면이 없습니다.`);
   $("dWarn").innerHTML = warn.map((w) => `<div class="warn">${w}</div>`).join("");
+  const qi = document.querySelector(`input[name=q][value="${mode !== "video" && n && n <= 15 ? "instant" : "best"}"]`);  // 사진이 적으면 아주 빠르게
+  if (qi) qi.checked = true;
   show("done"); pump();
 }
 $("more").onclick = () => startCapture(mode);

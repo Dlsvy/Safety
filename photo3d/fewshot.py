@@ -24,6 +24,16 @@ def find() -> Path | None:
     return py if py.exists() else None
 
 
+def _env() -> dict:
+    """가중치를 이미 받았으면 인터넷 확인 없이(HF 허브 확인이 느리거나 막힌 곳에서 몇 분씩 걸렸다)"""
+    import os
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    hub = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface")) / "hub"
+    if (hub / "models--facebook--map-anything-apache").exists():
+        env["HF_HUB_OFFLINE"] = "1"
+    return env
+
+
 def _infer(img_dir: Path, work: Path, log) -> list[dict] | None:
     py = find()
     if py is None:
@@ -34,7 +44,7 @@ def _infer(img_dir: Path, work: Path, log) -> list[dict] | None:
         names = names[:: int(np.ceil(len(names) / MAX_IMAGES))]
     work.mkdir(parents=True, exist_ok=True)
     lst = json.dumps([str(p) for p in names])
-    if (work / "poses.json").exists() and (work / "list.json").exists() \
+    if (work / "poses.json").exists() and (work / "poses_dense.npz").exists() and (work / "list.json").exists() \
             and (work / "list.json").read_text(encoding="utf-8") == lst:  # 같은 사진이면 다시 추정하지 않는다
         log("  MapAnything: 이전 추정 결과 재사용")
         return json.loads((work / "poses.json").read_text(encoding="utf-8"))
@@ -45,7 +55,7 @@ def _infer(img_dir: Path, work: Path, log) -> list[dict] | None:
         rc = subprocess.run([str(py), "-I", str(Path(__file__).with_name("fewshot_runner.py")),
                              str(work / "list.json"), str(work / "poses.json")],
                             stdout=lf, stderr=subprocess.STDOUT, timeout=3600,
-                            env={**__import__("os").environ, "PYTHONIOENCODING": "utf-8"}).returncode
+                            env=_env()).returncode
     if rc != 0 or not (work / "poses.json").exists():
         tail = (work / "mapanything.log").read_text(encoding="utf-8", errors="replace").strip().splitlines()[-3:]
         log("  MapAnything 실패: " + " | ".join(tail))
@@ -122,3 +132,76 @@ def run(img_dir: Path, work: Path, use_gpu: bool = True, log=print):
     log(f"  적은 장수 복원: 사진 {st['images_registered']}장 · 3D점 {st['points3D']:,} · 재투영오차 "
         f"{st['mean_reprojection_error_px']:.2f}px (크기는 MapAnything 추정 미터 — 마커가 있으면 마커가 우선)")
     return rec, st
+
+
+def _sim3(src: np.ndarray, dst: np.ndarray) -> tuple[float, np.ndarray, np.ndarray]:
+    """dst ≈ s·R·src + t (Umeyama). 카메라 위치끼리 맞춰 MapAnything 좌표 → 최종(정합·수평) 좌표"""
+    ms, md = src.mean(0), dst.mean(0)
+    a, b = src - ms, dst - md
+    U, S, Vt = np.linalg.svd(b.T @ a / len(src))
+    D = np.eye(3)
+    if np.linalg.det(U) * np.linalg.det(Vt) < 0:
+        D[2, 2] = -1
+    R = U @ D @ Vt
+    s = float(np.trace(np.diag(S) @ D) / max((a ** 2).sum() / len(src), 1e-12))
+    return s, R, md - s * R @ ms
+
+
+def dense_points(work: Path, rec, dst: Path, keep_conf: float = 0.3, max_points: int = 3_000_000,
+                 log=print) -> Path | None:
+    """MapAnything 이 사진마다 예측한 조밀 점(픽셀 단위 깊이)을 최종 좌표로 옮겨 COLMAP fused.ply 형식으로 쓴다.
+    사진이 적고 시점 차이가 크면 COLMAP 조밀복원(여러 사진 일치)이 거의 비어 나온다(8장: 3,584점) → 대신 이것을 쓴다.
+    신뢰도 하위 keep_conf 비율·모델 마스크 밖은 버리고, 법선은 사진의 점 격자에서 바로 구해 카메라 쪽으로 향하게 한다."""
+    npz, pj = work / "poses_dense.npz", work / "poses.json"
+    if not npz.exists() or not pj.exists():
+        return None
+    poses = json.loads(pj.read_text(encoding="utf-8"))
+    names = {rec.image(i).name: rec.image(i).projection_center() for i in rec.reg_image_ids()}
+    pairs = [(np.array(p["c2w"])[:3, 3], names[p["name"]]) for p in poses if p["name"] in names]
+    if len(pairs) < 3:
+        return None
+    s, R, t = _sim3(np.array([a for a, _ in pairs]), np.array([b for _, b in pairs]))
+    d = np.load(npz)
+    xyz, nrm, col = [], [], []
+    for k, p in enumerate(poses):
+        if f"pts{k}" not in d:
+            continue
+        P = d[f"pts{k}"].astype(np.float64)
+        ok = d[f"mask{k}"] & np.isfinite(P).all(-1)
+        cf = d[f"conf{k}"]
+        if ok.any():
+            ok &= cf >= np.quantile(cf[ok], keep_conf)
+        dx = np.zeros_like(P)  # 격자 이웃으로 법선(마지막 행·열은 버림)
+        dy = np.zeros_like(P)
+        dx[:, :-1] = P[:, 1:] - P[:, :-1]
+        dy[:-1] = P[1:] - P[:-1]
+        n = np.cross(dx, dy)
+        ok[-1, :] = False
+        ok[:, -1] = False
+        nn = np.linalg.norm(n, axis=-1)
+        ok &= nn > 0
+        n = n / np.maximum(nn, 1e-12)[..., None]
+        cam = np.array(p["c2w"])[:3, 3]
+        n[((cam - P) * n).sum(-1) < 0] *= -1
+        xyz.append(P[ok])
+        nrm.append(n[ok])
+        col.append((d[f"rgb{k}"] if f"rgb{k}" in d else np.full(P.shape, 128, np.uint8))[ok])
+    if not xyz:
+        return None
+    xyz, nrm, col = np.concatenate(xyz), np.concatenate(nrm), np.concatenate(col)
+    if len(xyz) > max_points:
+        sel = np.random.default_rng(0).choice(len(xyz), max_points, replace=False)
+        xyz, nrm, col = xyz[sel], nrm[sel], col[sel]
+    xyz = s * xyz @ R.T + t
+    nrm = nrm @ R.T
+    data = np.zeros(len(xyz), dtype=[("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("nx", "<f4"), ("ny", "<f4"),
+                                      ("nz", "<f4"), ("red", "u1"), ("green", "u1"), ("blue", "u1")])
+    for i, k in enumerate(("x", "y", "z")):
+        data[k] = xyz[:, i]
+        data["n" + k] = nrm[:, i]
+    data["red"], data["green"], data["blue"] = col[:, 0], col[:, 1], col[:, 2]
+    from .pointfilter import write_ply_raw
+    write_ply_raw(data, dst)
+    err = float(np.median([np.linalg.norm(s * R @ a + t - b) for a, b in pairs]))
+    log(f"  조밀 점(AI 깊이): {len(xyz):,}점 · 카메라 맞춤 오차 중앙 {err * 1000:.0f}mm (사진이 적어 COLMAP 조밀복원 대신)")
+    return dst

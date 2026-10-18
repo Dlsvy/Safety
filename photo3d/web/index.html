@@ -60,7 +60,8 @@ button:focus-visible,.btn:focus-visible,input:focus-visible{outline:2px solid va
 .samples button.remote{border-style:dashed}
 .samples button.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);color:var(--ink)}
 .chosen{font-size:13px;color:var(--muted);margin:4px 0 10px}
-.mode{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:0 0 10px}
+.mode{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:0 0 10px}
+@media (max-width:700px){.mode{grid-template-columns:1fr}}
 .mode label{border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;font-size:13px;color:var(--muted);display:flex;gap:8px;align-items:flex-start}
 .mode label strong{display:block;color:var(--ink);font-size:14px}
 .mode label:has(input:checked){border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
@@ -273,6 +274,7 @@ canvas.spark.big{width:100%;height:34px}
     <div class="samples" id="samples"></div>
     <div class="chosen" id="chosen">선택한 파일 없음 · 한쪽 면은 5~6장, 한 바퀴는 15~20장, 또는 1~2분 영상(천천히 걷기) · 360 카메라: 펼친 영상·사진(2:1) 또는 Insta360 원본(.insv·.insp)도 됩니다</div>
     <div class="mode" role="radiogroup" aria-label="품질">
+      <label><input type="radio" name="mode" value="instant"><span><strong>아주 빠르게</strong>약 3~7분 · 사진이 많아도 선명한 12장만 골라 형태 확인(AI 로 카메라·크기 추정)</span></label>
       <label><input type="radio" name="mode" value="fast" checked><span><strong>빠르게</strong><span class="only-splat">약 5~10분 · 프로토타입(해상도 낮춤·구멍 메우기 생략)</span><span class="only-pg">약 10~15분 · 현장 검토용(2400px)</span><span class="only-fuse">약 15~25분 · 2400px</span></span></label>
       <label><input type="radio" name="mode" value="best"><span><strong><span class="only-splat">최고 품질</span><span class="only-pg">정밀 측정</span><span class="only-fuse">최고 품질</span></strong><span class="only-splat">GPU 최대 · 15~30분</span><span class="only-pg">원본 해상도 · GPU 최대 · 20~40분</span><span class="only-fuse">원본 해상도 · GPU 최대 · 40~70분</span></span></label>
     </div>

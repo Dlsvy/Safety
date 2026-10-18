@@ -271,7 +271,8 @@ def add_prior_points(fused: Path, dense: Path, log=print) -> int:
 def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
                      quality: str = "medium", threads: int = 0, engine: str = "openmvs",
                      colmap_bin: str | None = None, on_dense_ready=None, prior: bool = True,
-                     subject: bool = False, resume: bool = False, strict: bool = False, log=print) -> dict:
+                     subject: bool = False, resume: bool = False, strict: bool = False,
+                     dense_points: Path | None = None, log=print) -> dict:
     q = QUALITY[quality]
     sparse = work / "sparse_georef"
     if sparse.exists():
@@ -318,6 +319,10 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
         if resume and (dense / "pm.done").exists():
             ladder = []
             log(f"  이어서 처리: 깊이 계산 완료분 재사용({size}px)")
+        if dense_points is not None:  # 사진이 적을 때: AI(MapAnything) 깊이 점으로 COLMAP 조밀복원을 대신
+            shutil.copy2(dense_points, dense / "fused.ply")
+            (dense / "fused.done").write_text("ok")
+            ladder = []
         for k, size in enumerate(ladder):
             keep = resume and k == 0 and pm_size.exists()
             if keep:
@@ -345,7 +350,7 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
                 log(f"  조밀복원 {size}px 실패 → {ladder[k + 1]}px 로 다시 ({str(e).splitlines()[-1].strip()[:120]})")
         log(f"  조밀복원 해상도 {size}px")
         fused = dense / "fused_raw.ply"
-        fused_done = resume and (dense / "fused.done").exists() and (dense / "fused.ply").exists()
+        fused_done = (resume or dense_points is not None) and (dense / "fused.done").exists() and (dense / "fused.ply").exists()
         if fused_done:
             fused = dense / "fused.ply"
             log("  이어서 처리: 조밀 점군 재사용")
