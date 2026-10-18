@@ -85,6 +85,36 @@ README.md 에 전체 설명·검증 결과가 있다. 먼저 README 를 읽어�
   torch_win_fix.py(torch 헤더 std 모호성 C2872), meshsplat_win_fix.py(or·uint·sqrt(int) 리눅스 전용 문법).
 - 저장소 compile.bat 은 옛 폴더명이라 안 됨 → 설치 스크립트가 세 확장을 직접 빌드. effrdel 은 src 경로 .pth 추가.
 
+## ▶ 지금 이어서 할 일 (2026-10-18 사용자 피드백 — 로컬 PC 세션에서 진행)
+사용자 결과 캡처(사무 건물 드론, 왼쪽 실사/스플랫, 오른쪽 메쉬): "품질 향상이 크게 안 느껴짐" + "빠른 작업에서도 새 기술(PGSR·MeshSplatting) 돌게".
+
+1) 메쉬의 검은 테두리(창·벽 경계마다 검은 띠) — 원인 거의 확실: 텍스처 아틀라스 여백
+   - photo3d/texture.py 의 패치 여백 pad=2px(240행), 아틀라스 빈 곳은 검정 → 뷰어/유니티가 멀리서 볼 때(mipmap) 검정이 번짐.
+   - 할 일: 굽기 끝에 빈 픽셀을 이웃 색으로 채우기(push-pull 또는 cv2.inpaint/반복 dilate, 패치 마스크 기준) + pad 4~8px.
+   - 확인: site_best_mesh.glb / site_opaque_mesh.glb 를 축소해서 볼 때 검은 띠가 사라지는지.
+2) 실사(스플랫) 벽의 검은 얼룩·하늘 조각·전봇대 늘어짐
+   - 검은 얼룩: 어두운 반투명 스플랫이 벽 앞에 뜸 → fuse.mesh_prune_and_agree 의 "표면 앞" 허공 스플랫도 지우기(지금은 뒤만),
+     또는 메쉬 표면 근처인데 색이 사진과 크게 다른(어두운) 스플랫의 불투명도 낮추기.
+   - 먼 건물·하늘 조각: 측정 범위(희소점 백분위) 밖 스플랫/메쉬 자르기(meshsplat._crop 과 같은 방식을 스플랫·best_mesh 에도).
+3) 빠른 모드에서도 새 기술
+   - 지금: cli.py — PGSR 은 빠른 모드 7000스텝으로 돌지만 MeshSplatting 은 `a.profile == "fast"` 면 생략.
+   - MeshSplatting 은 학습 일정이 30000 기준(train.py: sigma_until·final_opacity_iter·start_upsampling·start_vertex_opt·
+     densify_until_iter·iteration_mesh·start_pruning·start_opacity_floor·position_lr_max_steps). 이 값들은 arguments 의
+     OptimizationParams 라 그대로 `--이름 값` 으로 넘길 수 있음 → 빠른 모드는 iterations=10000 과 위 값들을 ×1/3 로 같이 넘기기
+     (간격값 densification_interval·intervall_add_triangles 500 은 그대로). meshsplat.run 에 iterations 인자 추가.
+   - 앱(app.py)은 mode 가 fast/best 뿐: best → profile gpu-max, 그 외 → fast. ("기본" 품질 없음)
+4) 효과 확인 방법: 같은 사진으로 이전 결과와 나란히(뷰어 '나란히 비교') + report.json 의 fuse.shape_mesh(pgsr/spirula),
+   fuse.opaque_mesh 가 있는지, work/pgsr/pgsr.log · work/meshsplat/meshsplat.log 로 실제로 돌았는지 먼저 확인.
+   (사용자 캡처가 빠른 모드였다면 MeshSplatting 은 안 돈 상태.)
+
+## 로컬 개발 메모
+- 저장소 Dlsvy/Safety, 브랜치 photo3d. PC 경로 C:\photo3d (APP.bat 이 git pull 후 scripts/app_run.bat 실행).
+- 외부 도구: third_party/pgsr(torch 2.7.1+cu128, PGSR venv), third_party/meshsplat(같은 torch), Spirula/OpenMVS/COLMAP 은 setup_windows.ps1.
+- 윈도우 CUDA 확장 빌드 우회: scripts/gpu/torch_win_fix.py(torch 헤더 C2872), scripts/gpu/meshsplat_win_fix.py(리눅스 전용 문법).
+  torch 2.11 은 헤더 패치로도 C2872 → 2.7.1 고정.
+- 확인 도구: pyflakes, node --check(index.html/m.html 의 script 추출), tools/eval_eth3d.py(ETH3D 정확도), Playwright(헤드리스 화면).
+- 폰 앱 시험: PHOTO3D_PORT/PHOTO3D_HTTPS_PORT/PHOTO3D_DATA 환경변수로 따로 띄워 시험 가능. 원격 요청 흉내는 헤더 `Cf-Ray: x`.
+
 ## 폰 앱 (2026-10-17, PC 에서 확인 필요)
 - PC 앱 오른쪽 위 '📱 폰 연결' → QR. 폰 화면 /m (photo3d/web/m.html, 홈 화면 추가 가능한 웹앱). 서버: photo3d/mobile.py.
 - 짝맞춤 토큰(app_data/mobile_token.txt): PC 밖 요청은 쿠키 p3d 필요. 터널은 localhost 로 들어오므로 Cf-Ray 등 헤더로 원격 판정(_is_local).
