@@ -288,7 +288,7 @@ def make_best(out: Path, work: Path, max_backing: int = 1_500_000, agree: dict |
     write_splat(dst, np.vstack([a, b]), props, comment="photo3d: best-of-both (splat + photogrammetry backing), Z-up")
     res = {"file": dst.name, "splats": int(len(a)), "backing": int(len(b)), "boosted": int(boost.sum()),
            "removed_hidden": info["hidden_removed"], "backing_step_m": round(float(step), 4), "tau_m": tau}
-    log(f"  최적 합성: 스플랫 {len(a):,}개(숨은 것 {info['hidden_removed']:,}개 제거·반투명 {int(boost.sum()):,}개 불투명하게) + "
+    log(f"  최적 합성: 스플랫 {len(a):,}개({'통합 정리에서 ' if agree else ''}숨은 것 {info['hidden_removed']:,}개 제거·반투명 {int(boost.sum()):,}개 불투명하게) + "
         f"포토그래메트리 면 받침 {len(b):,}개({step * 100:.1f}cm 간격) → {dst.name}")
     try:
         from .splatexport import write_spz

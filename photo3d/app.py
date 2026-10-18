@@ -460,7 +460,8 @@ def record_timing(d: Path, job: dict) -> None:
         row = {"mode": _mkey(job), "n": n, "s": st, "t": time.time()}
         try:  # 계획 대비 실제 시간 비율 — 다음 계획에 곱한다(이 PC 속도·다른 프로그램의 GPU 사용 반영)
             pl = json.loads((d / "out" / "work" / "plan.json").read_text(encoding="utf-8"))
-            row["ratio"] = round((job["finished"] - job["started"]) / 60 / max(pl["total_min"], 0.5), 3)
+            # 보정 전 예상과 비교(보정된 예상과 비교하면 보정이 겹쳐 커진다)
+            row["ratio"] = round((job["finished"] - job["started"]) / 60 / max(pl["total_min"] / pl.get("speed", 1), 0.5), 3)
         except Exception:
             pass
         if n and st:

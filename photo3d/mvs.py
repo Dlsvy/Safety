@@ -310,6 +310,8 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
         cap = int(os.environ.get("PHOTO3D_PM_MAX", 3200))
         size = {"draft": 2000 if cap >= 3200 else 1600, "medium": 2400, "high": 3200, "ultra": cap}[quality]
         size = min(size, cap)
+        if os.environ.get("PHOTO3D_PM_SIZE"):  # 시간 계획이 정한 해상도(빠르게 2000px 등)
+            size = min(int(os.environ["PHOTO3D_PM_SIZE"]), cap)
         fast = quality == "draft"
         src_n = int(os.environ.get("PHOTO3D_PM_SRC", "0"))  # 깊이 계산에 참고할 이웃 사진 수(0 = COLMAP 기본 20)
         cfg = dense / "stereo" / "patch-match.cfg"

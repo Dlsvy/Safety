@@ -486,6 +486,7 @@ def _apply_time_plan(a, prep: dict, img_dir: Path, work: Path, n_img: int, log=p
     a.pgsr_steps, a.ms_steps = st["pgsr_steps"], st["ms_steps"]
     if st["pm_size"]:
         os.environ["PHOTO3D_PM_MAX"] = str(min(int(os.environ.get("PHOTO3D_PM_MAX", "99999")), st["pm_size"]))
+        os.environ["PHOTO3D_PM_SIZE"] = str(st["pm_size"])
     if st["pm_src"]:
         os.environ["PHOTO3D_PM_SRC"] = str(st["pm_src"])
     os.environ["PHOTO3D_SPIRULA_STEPS"] = str(st["splat_steps"])
