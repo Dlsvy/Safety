@@ -63,6 +63,32 @@ def _sample(im, x, y):
     return out.reshape(-1, 3)[:n, ::-1].astype(np.float32)
 
 
+def _fill_empty(tex: np.ndarray, filled: np.ndarray) -> np.ndarray:
+    """칠하지 않은 텍셀(패치·셀 사이 틈, 아틀라스 남는 곳)을 주변 색으로 채운다(push-pull).
+    빈 곳이 검정이면 멀리서 볼 때(mipmap) 검정이 섞여 창·벽 경계마다 검은 띠가 생긴다."""
+    import cv2
+    if filled.all() or not filled.any():
+        return tex
+    img =tex.astype(np.float32) * filled[..., None]
+    w = filled.astype(np.float32)
+    levels = [(img, w)]
+    while max(levels[-1][1].shape) > 1:  # push: 칠한 텍셀만으로 평균(가중치 = 칠한 비율)
+        i, ww = levels[-1]
+        size = (max(1, (ww.shape[1] + 1) // 2), max(1, (ww.shape[0] + 1) // 2))
+        levels.append((cv2.resize(i, size, interpolation=cv2.INTER_AREA),
+                       cv2.resize(ww, size, interpolation=cv2.INTER_AREA)))
+    col = None
+    for i, ww in reversed(levels):  # pull: 칠한 비율만큼 자기 색, 나머지는 한 단계 거친 색
+        if col is None:
+            col = i / max(float(ww.max()), 1e-8)
+            continue
+        up = cv2.resize(col, (ww.shape[1], ww.shape[0]), interpolation=cv2.INTER_LINEAR)
+        col = i + up * (1 - ww)[..., None]
+    out = tex.copy()
+    out[~filled] = np.clip(col[~filled], 0, 255).astype(np.uint8)
+    return out
+
+
 def bake(mesh, sparse: Path, img_dir: Path, atlas: int = 8192, max_faces: int = 600_000,
          vertex_only: np.ndarray | None = None, log=print):
     """vertex-color 메쉬 → TextureVisuals 메쉬(trimesh). 사진에 안 보인 면은 정점 색을 그대로 굽는다."""
@@ -237,7 +263,7 @@ def bake(mesh, sparse: Path, img_dir: Path, atlas: int = 8192, max_faces: int = 
     cs = comp_s[order]
     starts = np.r_[0, np.nonzero(np.diff(cs))[0] + 1]
     ends = np.r_[starts[1:], len(cs)]
-    pad = 2
+    pad = 4  # 축소 보기(mipmap)에서 이웃 패치 색이 섞이지 않게 여유(예전 2px → 창·벽 경계에 띠)
     for st, en in zip(starts, ends):
         fs = fs_sorted[st:en]
         uv = corner_uv[fs].reshape(-1, 2)
@@ -343,6 +369,7 @@ def bake(mesh, sparse: Path, img_dir: Path, atlas: int = 8192, max_faces: int = 
             log(f"  아틀라스에 안 들어간 패치 {len(drop):,}개는 정점 색으로")
     H = W = atlas
     tex = np.zeros((H, W, 3), np.uint8)
+    filled = np.zeros((H, W), bool)  # 색을 칠한 텍셀 — 나머지는 끝에 주변 색으로 채운다
     out_uv = np.zeros((nF, 3, 2), np.float64)  # 픽셀 좌표(아틀라스)
     for i, (fs, ci, lo, hi) in enumerate(patches):
         px, py = pos[i]
@@ -355,6 +382,7 @@ def bake(mesh, sparse: Path, img_dir: Path, atlas: int = 8192, max_faces: int = 
         crop = np.clip(crop[:, :, ::-1].astype(np.float32) * gain[ci] + p_off[i], 0, 255).astype(np.uint8)
         hh, ww = min(h, H - py), min(w, W - px)
         tex[py:py + hh, px:px + ww] = crop[:hh, :ww]
+        filled[py:py + hh, px:px + ww] = True
         out_uv[fs] = (corner_uv[fs] - lo) * s_scale + np.array([px, py])
     if len(unseen):
         y0 = y + rowh
@@ -375,7 +403,9 @@ def bake(mesh, sparse: Path, img_dir: Path, atlas: int = 8192, max_faces: int = 
         tx = cx[:, None] + gx.ravel().astype(int)[None]
         ok_ = ty < H
         tex[ty[ok_], tx[ok_]] = np.clip(cols[ok_], 0, 255).astype(np.uint8)
+        filled[ty[ok_], tx[ok_]] = True
         out_uv[unseen] = tri_cell[None] + np.stack([cx, cy], 1)[:, None, :]
+    tex = _fill_empty(tex, filled)
     log(f"  패치 {len(patches):,}개 · 축척 {s_scale:.2f}(사진 1px → 아틀라스 {s_scale:.2f}px) · 안 보인 면 {len(unseen):,}")
     # 면 꼭짓점별 UV 를 가진 메쉬 (패치 경계에서 정점이 갈라짐) — 같은 패치 안 공유 정점은 합친다
     key = np.repeat(comp, 3).astype(np.int64) * np.int64(len(V)) + F.ravel()

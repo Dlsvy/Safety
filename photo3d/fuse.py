@@ -9,7 +9,10 @@ Multiview Geometric Regularization CGF25, MeshGS ACCV24)는 형상 정확도를 
 2) 표면 방향 지도: 사진 한 장 추정(MoGe) 대신 측정 메쉬를 각 사진 위치에서 그려 만든다(여러 사진으로 잰 값,
    메쉬가 없는 곳은 0 = 지도 없음). 깊이 지도는 PHOTO3D_FUSE_DEPTH=1 일 때만(MoGe 깊이는 화질을 떨어뜨렸다)
 3) 정리: 사진에서 볼 때 측정 표면 '뒤'에 숨은 스플랫(벽 속·바닥 밑 잡티)을 지운다 — 표면에서 떨어져 있고
-   그것을 보는 사진 대부분에서 표면 뒤에 있을 때만(MeshGS 의 거리 분류를 보수적으로)
+   그것을 보는 사진 대부분에서 표면 뒤에 있을 때만(MeshGS 의 거리 분류를 보수적으로).
+   표면 '앞' 허공에 뜬 스플랫(벽 앞 검은 얼룩)도 지운다 — 사진들이 그 자리를 지나 표면을 봤으니 빈 공간이다.
+   앞쪽은 실제 물체(전선·나뭇가지)일 수 있어 더 엄격하게: 사진 3장 이상, 조밀점·메쉬에서 허용오차 3배 이상 떨어진 것,
+   또는 어둡고 반투명한 것(로그 대비 어두운 반투명 덩어리가 벽 앞에 뜨는 전형적인 잡티)
 4) 일치도 보고: 스플랫 중심 ~ 메쉬 거리(불투명도 가중) 중앙값·90%·허용오차 안 비율
 """
 from __future__ import annotations
@@ -132,6 +135,7 @@ def mesh_prune_and_agree(splat_ply: Path, mesh_path: Path, sparse: Path, dense_p
     cams = _cams(sparse)
     seen = np.zeros(len(xyz), np.int32)
     behind = np.zeros(len(xyz), np.int32)
+    front = np.zeros(len(xyz), np.int32)
     for cam in cams:
         z, _, s = _render(rmi, mesh, cam, max_side)
         H, W = z.shape
@@ -144,10 +148,25 @@ def mesh_prune_and_agree(splat_ply: Path, mesh_path: Path, sparse: Path, dense_p
         idx = np.where(ok)[0]
         zm = z[v[idx].astype(int), u[idx].astype(int)]
         has = zm > 0
+        # 그린 깊이는 저해상도(픽셀 하나 = zc/(f·s), 먼 바닥은 수 cm) → 픽셀 2개 크기만큼 여유
+        # (고정 허용오차만 쓰면 비스듬히 보이는 먼 바닥이 '표면 뒤'로 세어져 사진 바닥 스플랫이 통째로 지워졌다)
+        mg = tau + 2 * zc[idx] / (K[0, 0] * s)
         seen[idx[has]] += 1
-        behind[idx[has & (zc[idx] > zm + tau)]] += 1
-    hidden = (seen >= 2) & (behind >= 0.8 * seen) & (d_mesh > tau) & (d_dense > tau)
-    keep = ~hidden
+        behind[idx[has & (zc[idx] > zm + mg)]] += 1
+        front[idx[has & (zc[idx] < zm - 2 * mg)]] += 1
+    lo, hi = mesh.bounds[0] - tau, mesh.bounds[1] + tau
+    in_box = ((xyz >= lo) & (xyz <= hi)).all(1)  # 메쉬 범위 밖은 앞뒤를 판단할 근거가 약하다
+    hidden = (seen >= 2) & (behind >= 0.8 * seen) & (d_mesh > tau) & (d_dense > tau) & in_box
+    # 표면 앞 허공: 색(SH 0차)으로 밝기 → 어둡고 반투명한 잡티는 조금 덜 엄격하게
+    lum = np.full(len(xyz), 0.5)
+    if all(f"f_dc_{i}" in col for i in range(3)):
+        rgb = 0.5 + 0.28209479 * a[:, [col["f_dc_0"], col["f_dc_1"], col["f_dc_2"]]].astype(np.float64)
+        lum = rgb @ np.array([0.299, 0.587, 0.114])
+    free = (seen >= 3) & (front >= 0.8 * seen) & in_box
+    floating = free & (d_mesh > 3 * tau) & (d_dense > 3 * tau)
+    floating |= in_box & (seen >= 3) & (front >= 0.6 * seen) & (lum < 0.25) & (op < 0.6) & (d_mesh > tau) & (d_dense > tau)
+    floating &= ~hidden
+    keep = ~(hidden | floating)
     write_splat(out, a[keep], props, comment="photo3d: fused (mesh-checked) splat, Z-up")
     w = op[keep]
     dk = d_mesh[keep]
@@ -156,10 +175,12 @@ def mesh_prune_and_agree(splat_ply: Path, mesh_path: Path, sparse: Path, dense_p
 
     def wq(q):
         return float(dk[order][min(len(order) - 1, np.searchsorted(cw, q))]) if len(order) else 0.0
-    info = {"before": int(len(a)), "hidden_removed": int(hidden.sum()), "after": int(keep.sum()),
+    info = {"before": int(len(a)), "hidden_removed": int(hidden.sum()), "floating_removed": int(floating.sum()),
+            "after": int(keep.sum()),
             "tau_m": round(tau, 4), "dist_p50_m": round(wq(0.5), 4), "dist_p90_m": round(wq(0.9), 4),
             "within_tau": round(float(w[dk <= tau].sum() / max(w.sum(), 1e-12)), 3)}
-    log(f"  통합 정리: 측정 표면 뒤에 숨은 스플랫 {info['hidden_removed']:,}개 제거 → {info['after']:,}개 · "
+    log(f"  통합 정리: 측정 표면 뒤에 숨은 스플랫 {info['hidden_removed']:,}개 · 앞 허공에 뜬 것 "
+        f"{info['floating_removed']:,}개 제거 → {info['after']:,}개 · "
         f"메쉬와 거리 중앙 {info['dist_p50_m'] * 1000:.0f}mm · 90% {info['dist_p90_m'] * 1000:.0f}mm · "
         f"허용({tau * 1000:.0f}mm) 안 {info['within_tau']:.0%}")
     return info

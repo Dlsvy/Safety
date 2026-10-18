@@ -82,6 +82,17 @@ def clean_points(xyz: np.ndarray, cams: np.ndarray | None = None, vis: np.ndarra
     return keep
 
 
+def write_ply_raw(data: np.ndarray, dst: Path) -> None:
+    """trimesh 가 읽은 PLY 정점 구조체 배열(_ply_raw)을 법선·색 그대로 이진 PLY 로 쓴다"""
+    with open(dst, "wb") as f:
+        hdr = "ply\nformat binary_little_endian 1.0\nelement vertex %d\n" % len(data)
+        for nm in data.dtype.names:
+            t = data.dtype[nm]
+            hdr += f"property {'float' if t.kind == 'f' and t.itemsize == 4 else 'double' if t.kind == 'f' else 'uchar' if t.itemsize == 1 else 'int'} {nm}\n"
+        f.write((hdr + "end_header\n").encode())
+        f.write(data.astype(data.dtype.newbyteorder("<")).tobytes())
+
+
 def clean_ply(src: Path, dst: Path, cams: np.ndarray | None = None, log=print, work: Path | None = None) -> Path:
     """COLMAP fused.ply(법선·색 포함) → 정리된 PLY. 실패 시 원본 경로를 돌려준다."""
     import trimesh
@@ -97,15 +108,7 @@ def clean_ply(src: Path, dst: Path, cams: np.ndarray | None = None, log=print, w
             if bad is not None:
                 keep &= ~bad
         if raw is not None:
-            data = raw[keep]
-            names = data.dtype.names
-            with open(dst, "wb") as f:
-                hdr = "ply\nformat binary_little_endian 1.0\nelement vertex %d\n" % len(data)
-                for nm in names:
-                    t = data.dtype[nm]
-                    hdr += f"property {'float' if t.kind == 'f' and t.itemsize == 4 else 'double' if t.kind == 'f' else 'uchar' if t.itemsize == 1 else 'int'} {nm}\n"
-                f.write((hdr + "end_header\n").encode())
-                f.write(data.astype(data.dtype.newbyteorder("<")).tobytes())
+            write_ply_raw(raw[keep], dst)
         else:
             trimesh.PointCloud(xyz[keep], colors=np.asarray(pc.colors)[keep]).export(dst)
         return dst

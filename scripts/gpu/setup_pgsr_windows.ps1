@@ -25,7 +25,8 @@ $Py = Join-Path $Venv "Scripts\python.exe"
 #   MeshSplatting 과 같은 2.7.1 은 torch_win_fix.py 로 빌드 성공 확인(2026-10-17). 이미 받은 파일은 pip 캐시에서 재사용
 & $Py -m pip install torch==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cu128
 # pytorch3d 는 윈도우 설치가 어려워 빼고(photo3d 가 실행 전에 그 함수 하나를 직접 넣어 줌) 나머지만
-& $Py -m pip install open3d plyfile opencv-python lpips trimesh tqdm
+# open3d 0.20.0(윈도우)은 TSDF 메쉬가 비어 나온다(평평한 벽 시험도 삼각형 0개, 2026-10-18) → 0.19.0 고정
+& $Py -m pip install "open3d==0.19.0" plyfile opencv-python lpips trimesh tqdm
 # CUDA 확장 컴파일: 'x64 Native Tools' 환경 변수가 필요 → vcvars64 를 불러 같은 창에서 빌드
 $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * `
         -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null

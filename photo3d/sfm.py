@@ -182,13 +182,19 @@ def _run_cli(colmap: str, image_dir: Path, work: Path, sequential: bool, single_
     if mapper == "global":
         sg, si = sparse / "_global", sparse / "_incr"
         sg.mkdir(); si.mkdir()
-        run("global_mapper", "--database_path", str(db), "--image_path", str(image_dir),
-            "--output_path", str(sg),
-            *(["--GlobalMapper.ba_ceres_use_gpu", "1", "--GlobalMapper.gp_use_gpu", "1"] if use_gpu else []))
-        cands = [("global", load(sg))]
+        cands = []
+        try:  # 사진이 적거나 연결이 약하면 글로벌 매퍼가 종료코드 1로 끝난다 → 증분 결과만으로 계속
+            run("global_mapper", "--database_path", str(db), "--image_path", str(image_dir),
+                "--output_path", str(sg),
+                *(["--GlobalMapper.ba_ceres_use_gpu", "1", "--GlobalMapper.gp_use_gpu", "1"] if use_gpu else []))
+            cands.append(("global", load(sg)))
+        except RuntimeError as e:
+            log(f"  글로벌 매퍼 실패 → 증분 매퍼로: {e}")
         try:  # 증분(완화)도 돌려 비교 — 글로벌이 가끔 위치를 통째로 틀리게 잡는 문제 대비
             cands.append(("incremental", incremental(si)))
         except RuntimeError as e:
+            if not cands:
+                raise
             log(f"  증분 매퍼 생략: {e}")
         recs = pick_best(cands, log)
     else:

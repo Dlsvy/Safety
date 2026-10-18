@@ -1003,6 +1003,21 @@ class Handler(BaseHTTPRequestHandler):
             if p in ("/m", "/m/"):  # 폰 앱(현장 촬영 → 자동 업로드 → 3D)
                 return self._file(WEB / "m.html")
             m = re.fullmatch(r"/m/(manifest\.webmanifest|sw\.js|icon\.svg)", p)
+            t = (parse_qs(u.query).get("t") or [""])[0]
+            if m and m.group(1) == "manifest.webmanifest" and t:
+                # 홈 화면 앱의 시작 주소에 연결 코드를 넣는다 — 아이폰 홈 화면 앱은 사파리와 쿠키·저장소를 따로 써서
+                # 코드 없이 열리면 '연결 필요'로 막혔다
+                from . import mobile
+                if secrets.compare_digest(t, mobile.token(DATA)):
+                    man = json.loads((WEB / "m" / "manifest.webmanifest").read_text(encoding="utf-8"))
+                    man["start_url"] = f"/m?t={t}"
+                    body = json.dumps(man, ensure_ascii=False).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/manifest+json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
             if m:
                 ct = {"manifest.webmanifest": "application/manifest+json", "sw.js": "text/javascript"}.get(m.group(1))
                 if m.group(1) == "sw.js":  # /m/sw.js 가 /m 화면까지 맡도록
@@ -1172,10 +1187,12 @@ class Handler(BaseHTTPRequestHandler):
                 if not self._is_local():
                     return self._json({"error": "PC 에서만 쓸 수 있습니다"}, 403)
                 from . import mobile
-                if self._body_json().get("on"):
+                on = bool(self._body_json().get("on"))
+                if on:
                     mobile.tunnel_start(ROOT, int(os.environ.get("PHOTO3D_PORT", "8765")))
                 else:
                     mobile.tunnel_stop()
+                (DATA / "mobile_tunnel_on.txt").write_text("1" if on else "0")  # 다음에 앱을 켤 때도 같은 상태로
                 return self._json({"tunnel": mobile.TUNNEL})
             if p == "/api/browse":  # 이 PC 에서만: 윈도우 폴더 선택 창
                 if not self._is_local():
@@ -1422,6 +1439,9 @@ def main():
     from . import mobile
     _HTTPS["port"] = mobile.serve_https(Handler, DATA, [u.split("//")[1].split(":")[0] for u in lan_urls(port)])
     print("  폰 앱: PC 화면 오른쪽 위 '폰 연결' 버튼의 QR 코드를 폰 카메라로 찍으세요")
+    tf = DATA / "mobile_tunnel_on.txt"
+    if tf.exists() and tf.read_text().strip() == "1":  # 지난번에 켜 두었으면 '어디서나 접속' 주소를 미리 연다
+        mobile.tunnel_start(ROOT, port)
     print("  (끄려면 이 창을 닫으세요)")
     if os.environ.get("PHOTO3D_NO_BROWSER") != "1":
         try:

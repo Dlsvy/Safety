@@ -25,7 +25,7 @@ def _jsonable(o):
 
 
 def run(a) -> dict:
-    from . import export, frames, mvs, scale, sfm
+    from . import export, fewshot, frames, mvs, scale, sfm
 
     out = Path(a.out)
     work = out / "work"
@@ -129,16 +129,35 @@ def run(a) -> dict:
         log("2/5 SfM (카메라 자세·렌즈 보정)")
         if prep.get("pano_views"):
             log(f"  360° 사진/영상에서 원근 사진 {prep['pano_views']}장 생성")
-        rec, st = sfm.run_sfm(img_dir, work / "sfm", sequential=prep["sequential"],
-                              single_camera=prep.get("single_camera", True),
-                              camera_model=prep.get("camera_model") or "OPENCV",
-                              camera_params=prep.get("camera_params"), rig=prep.get("rig"),
-                              mapper=a.mapper, use_gpu=a.gpu,
-                              colmap_bin=a.colmap_bin, features=a.features,
-                              mask_dir=Path(a.masks) if a.masks else (Path(prep["mask_dir"]) if prep.get("mask_dir") else None),
-                              per_folder=bool(prep.get("per_folder")), refine_pp=a.refine_pp,
-                              robust=not a.no_robust, max_side=a.max_side,
-                              max_features=a.max_features, log=log)
+        n_img = len(prep["images"])
+        rec = st = None
+        mask_dir = Path(a.masks) if a.masks else (Path(prep["mask_dir"]) if prep.get("mask_dir") else None)
+        if mask_dir is None and not a.subject and not prep.get("rig") and os.environ.get("PHOTO3D_NO_DYNMASK") != "1":
+            from . import dynmask  # 작업자·차량 위 특징점은 카메라 계산에서 뺀다(사람 스캔 모드는 제외)
+            mask_dir = dynmask.make(img_dir, work / "masks_dynamic", log=log)
+        try:
+            rec, st = sfm.run_sfm(img_dir, work / "sfm", sequential=prep["sequential"],
+                                  single_camera=prep.get("single_camera", True),
+                                  camera_model=prep.get("camera_model") or "OPENCV",
+                                  camera_params=prep.get("camera_params"), rig=prep.get("rig"),
+                                  mapper=a.mapper, use_gpu=a.gpu,
+                                  colmap_bin=a.colmap_bin, features=a.features,
+                                  mask_dir=mask_dir,
+                                  per_folder=bool(prep.get("per_folder")), refine_pp=a.refine_pp,
+                                  robust=not a.no_robust, max_side=a.max_side,
+                                  max_features=a.max_features, log=log)
+        except Exception as e:
+            if n_img > fewshot.MAX_IMAGES or fewshot.find() is None:
+                raise
+            log(f"  COLMAP 카메라 계산 실패({str(e)[:120]}) → 적은 장수 방식으로")
+        # 사진이 적어(≤40장) COLMAP 이 일부만 연결하면 MapAnything 으로 시작값을 잡아 다시(8장 시험: COLMAP 2/8장 → 8/8장)
+        if n_img <= fewshot.MAX_IMAGES and (st is None or st["images_registered"] < 0.8 * n_img) and not prep.get("rig"):
+            fs = fewshot.run(img_dir, work / "fewshot", use_gpu=a.gpu, log=log)
+            if fs is not None and (st is None or fs[1]["images_registered"] > st["images_registered"]):
+                rec, st = fs
+        if rec is None:
+            raise RuntimeError("카메라 위치를 계산하지 못했습니다 — 사진 사이 겹침을 늘리거나(한 장씩 옆으로 조금씩) "
+                               "적은 장수 보조(scripts/gpu/setup_mapanything_windows.ps1)를 설치하세요")
     rep["sfm"] = st
 
     if not resumed:
@@ -148,6 +167,12 @@ def run(a) -> dict:
                                  Path(a.check) if a.check else None,
                                  scale_csv=Path(a.scale_dist) if a.scale_dist else None,
                                  gcp_ba=not a.no_gcp_ba, log=log)
+        if geo.get("method") == "none_leveled" and st.get("fewshot"):
+            # 마커가 없어도 적은 장수 경로(MapAnything)는 미터 단위를 추정한다 — 축척 1 로 그대로 두었으므로 그 값을 쓴다
+            geo["method"] = "ai_metric_estimate"
+            geo.setdefault("warnings", []).append("크기는 AI(MapAnything) 추정 미터 — 수~10% 오차 가능(검증 전). "
+                                                  "치수가 중요하면 마커나 줄자 거리 하나를 넣으세요")
+            log("  축척: 마커 없음 → AI 추정 미터 사용(개략 치수)")
         (work / "sfm" / "georef").mkdir(parents=True, exist_ok=True)
         rec.write(work / "sfm" / "georef")
         ck.write_text(json.dumps({"stage": 3, "img_dir": str(img_dir), "sfm": st, "georef": geo,
@@ -329,7 +354,11 @@ def run(a) -> dict:
                             if mi:
                                 import trimesh
                                 from .texture import bake
+                                from .meshsplat import _crop
                                 bm = trimesh.load(work / "mvs" / mi["file"], process=False, force="mesh")
+                                cut = _crop(bm, work / "dense" / "sparse")  # 하늘·먼 배경 조각
+                                if cut:
+                                    log(f"  최적 합성 메쉬: 측정 범위 밖 면 {cut:,}개 제거")
                                 tm, _ = bake(bm, work / "dense" / "sparse", work / "dense" / "images",
                                              atlas=8192, max_faces=1_200_000, log=log)
                                 tm.apply_transform(export.ZUP_TO_YUP)
@@ -337,17 +366,18 @@ def run(a) -> dict:
                                 rep["fuse"]["best_mesh"] = mi
                     except Exception as e:
                         log(f"  최적 합성 메쉬 생략: {e}")
-                    # 보이는 모델: MeshSplatting 불투명 메쉬(설치돼 있고 빠른 모드가 아닐 때 — 30,000스텝 고정)
+                    # 보이는 모델: MeshSplatting 불투명 메쉬(설치돼 있을 때 — 빠른 모드는 일정을 1/3 로 당겨 10,000스텝)
                     try:
                         from . import meshsplat
                         if meshsplat.find_meshsplat() is not None:
-                            if a.profile == "fast":
-                                log("  MeshSplatting 생략(빠른 모드 — 기본·최고 품질에서 실행)")
-                            else:
-                                mp = meshsplat.run(work / "dense", work / "meshsplat", log=log)
-                                oi = mp and meshsplat.opaque_model(mp, work / "dense", out / "site_opaque_mesh.glb", log=log)
-                                if oi:
-                                    rep["fuse"]["opaque_mesh"] = oi
+                            mp = meshsplat.run(work / "dense", work / "meshsplat", log=log,
+                                               iterations=10_000 if a.profile == "fast" else meshsplat.ITERATIONS)
+                            oi = mp and meshsplat.opaque_model(mp, work / "dense", out / "site_opaque_mesh.glb", log=log)
+                            if oi:
+                                rep["fuse"]["opaque_mesh"] = oi
+                                # 빠른 모드(10,000스텝) 결과는 삼각형이 흩어져 아직 거칠다(1Family 확인) → 화면 '불투명 모델'
+                                # 로만 보고, 유니티 패키지 보기 모델로는 최적 합성 메쉬를 쓴다
+                                (out / "site_opaque_mesh.preview").write_text("fast", encoding="utf-8")                                     if a.profile == "fast" else (out / "site_opaque_mesh.preview").unlink(missing_ok=True)
                     except Exception as e:
                         log(f"  불투명 모델 생략: {e}")
                     rep["splat"]["splats"] = fi["after"]
@@ -400,6 +430,8 @@ def grade(rep: dict) -> dict:
         issues.append(f"재투영오차 {s['mean_reprojection_error_px']:.2f}px")
     if g["method"].startswith("none"):
         return {"grade": "D", "reason": "축척 미확정 — 시뮬레이션 사용 불가"}
+    if g["method"] == "ai_metric_estimate":
+        return {"grade": "C", "reason": "AI 추정 축척(마커 없음) — 개략 배치·위험성 검토용, 정밀 치수는 마커·줄자 필요"}
     errs = [abs(r["error_mm"]) for r in g.get("check_distances", [])]
     errs += [v * 1000 for v in g.get("checkpoint_error_m", {}).values()]
     if not errs:

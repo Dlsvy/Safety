@@ -116,10 +116,13 @@ def _fix_topology(m, min_faces: int = 50, rounds: int = 5) -> None:
     m.remove_unreferenced_vertices()
 
 
-def prune_mesh(mesh_path: Path, points_path: Path, dst: Path, strict: float | None = None, log=print) -> Path:
+def prune_mesh(mesh_path: Path, points_path: Path, dst: Path, strict: float | None = None,
+               min_step: float = 0.0, log=print) -> Path:
     """Poisson 메쉬에서 측정점과 동떨어진 면과 바늘처럼 긴 삼각형(가시)을 지운다.
     strict(점 간격의 배수): 측정용(포토그래메트리). 면의 세 꼭짓점·중심이 모두 측정점에서 이 거리 안인 면만 남긴다
-    → 측정점 사이를 건너 이은 추정 면 제거. ETH3D delivery_area: 5cm F1 58→71%, 중앙 오차 62→26mm(완전도 78→66%)."""
+    → 측정점 사이를 건너 이은 추정 면 제거. ETH3D delivery_area: 5cm F1 58→71%, 중앙 오차 62→26mm(완전도 78→66%).
+    min_step: 메쉬 자체 해상도(Poisson 칸 크기의 절반). 메쉬가 점보다 거칠면 점 간격 대신 이것을 기준으로 쓴다
+    (1Family: 점 6mm·Poisson 칸 38cm → 점 간격 3배 기준으로 701,145면 중 724면만 남던 문제)."""
     import trimesh
     from scipy.spatial import cKDTree
     try:
@@ -127,7 +130,7 @@ def prune_mesh(mesh_path: Path, points_path: Path, dst: Path, strict: float | No
         from .fill import read_points  # COLMAP fused.ply·OpenMVS 점군 모두
         pts = np.asarray(read_points(points_path)[0], float)
         tree = cKDTree(pts)
-        sp = float(np.median(tree.query(pts[:: max(1, len(pts) // 20000)], k=2)[0][:, 1]))
+        sp = max(float(np.median(tree.query(pts[:: max(1, len(pts) // 20000)], k=2)[0][:, 1])), min_step)
         d, _ = tree.query(m.triangles_center, workers=-1)
         el = np.linalg.norm(m.vertices[m.faces] - m.vertices[np.roll(m.faces, 1, 1)], axis=2).max(1)
         thin = el ** 2 / np.maximum(2 * m.area_faces, 1e-12)
@@ -139,6 +142,9 @@ def prune_mesh(mesh_path: Path, points_path: Path, dst: Path, strict: float | No
             far |= np.maximum(dv[m.faces].max(1), d) > strict * sp
         needle = (thin > 12) & (el > 8 * np.median(el))
         n0 = len(m.faces)
+        if strict and (far | needle).mean() > 0.9:  # 거의 다 지워지면 기준이 메쉬와 안 맞는 것 → 가시만 지운다
+            log(f"  경고: 엄격 정리가 면의 {(far | needle).mean():.0%} 를 지우려 함 → 가시 정리만 적용")
+            far, strict = d > 20 * sp, None
         m.update_faces(~(far | needle))
         m.remove_unreferenced_vertices()
         if strict:
@@ -150,6 +156,44 @@ def prune_mesh(mesh_path: Path, points_path: Path, dst: Path, strict: float | No
     except Exception as e:
         log(f"  메쉬 가시 정리 생략({e})")
         return mesh_path
+
+
+def _poisson_input(fused: Path, rec, dst: Path, base_depth: int, log=print) -> tuple[Path, int, float]:
+    """Poisson 입력을 측정 범위로 자르고 깊이(옥트리 단계)를 점 간격에 맞춘다. 반환: (입력 PLY, 깊이, 칸 크기)
+
+    멀리 보이는 배경 점(1Family: 카메라 범위 9m, 점군 386m) 때문에 상자가 커지면 같은 깊이에서 칸이 수십 배 거칠어져
+    주인공까지 뭉개진다. 범위 = 카메라 상자 ± max(카메라 폭, 카메라→희소점 거리 중앙값) 과 조밀점 0.5~99.5% 상자의 교집합.
+    깊이는 칸이 점 간격 2배가 되도록 올리되 기본+1(최대 12)까지만(메모리·시간)."""
+    import trimesh
+    from scipy.spatial import cKDTree
+    from .pointfilter import write_ply_raw
+    try:
+        pc = trimesh.load(fused, process=False)
+        xyz = np.asarray(pc.vertices, float)
+        raw = pc.metadata.get("_ply_raw", {}).get("vertex", {}).get("data")
+        C = np.array([rec.image(i).projection_center() for i in rec.reg_image_ids()])
+        P = np.array([p.xyz for p in rec.points3D.values()])
+        r = max(float(np.ptp(C, 0).max()), float(np.median(np.linalg.norm(P[:, None] - C[None, ::max(1, len(C) // 20)],
+                                                                         axis=2))) if len(P) else 0.0)
+        lo = np.maximum(C.min(0) - r, np.percentile(xyz, 0.5, 0))
+        hi = np.minimum(C.max(0) + r, np.percentile(xyz, 99.5, 0))
+        keep = ((xyz >= lo) & (xyz <= hi)).all(1)
+        src = fused
+        if raw is not None and keep.mean() < 0.98:
+            write_ply_raw(raw[keep], dst)
+            src = dst
+        else:
+            lo, hi = xyz.min(0), xyz.max(0)
+        k = xyz[keep]
+        sp = float(np.median(cKDTree(k).query(k[:: max(1, len(k) // 20000)], k=2, workers=-1)[0][:, 1]))
+        ext = float((hi - lo).max())
+        depth = int(np.clip(np.ceil(np.log2(ext / max(2 * sp, 1e-9))), base_depth, min(base_depth + 1, 12)))
+        log(f"  메쉬 범위: {', '.join(f'{v:.1f}' for v in hi - lo)} m (점 {keep.mean():.0%} 사용) · Poisson 깊이 {depth}"
+            f" · 칸 {ext / 2 ** depth * 100:.1f}cm")
+        return src, depth, ext / 2 ** depth
+    except Exception as e:
+        log(f"  메쉬 범위 자르기 생략({e})")
+        return fused, base_depth, 0.0
 
 
 def subject_masks(dense: Path, log=print) -> Path | None:
@@ -341,11 +385,13 @@ def densify_and_mesh(rec: pycolmap.Reconstruction, image_dir: Path, work: Path,
         # Windows OpenMVS v2.4.0 ReconstructMesh 가 이 점군에서 GPU판·CPU판 모두 종료(PC 3회)
         # → 메쉬는 COLMAP Poisson(정점 색 포함)으로 만든다
         mesh = mvs / "scene_mesh_poisson.ply"
-        _run([colmap_bin, "poisson_mesher", "--input_path", str(dense / "fused.ply"),
-              "--output_path", str(mesh), "--PoissonMeshing.depth", "10" if quality == "draft" else "11",
+        core, depth, cell = _poisson_input(dense / "fused.ply", rec, mvs / "scene_core.ply",
+                                           10 if quality == "draft" else 11, log)
+        _run([colmap_bin, "poisson_mesher", "--input_path", str(core),
+              "--output_path", str(mesh), "--PoissonMeshing.depth", str(depth),
               "--PoissonMeshing.trim", "7"], mvs, log, logf)  # color 는 3.9=숫자, 4.x=on/off 라 지정 안 함
-        mesh = prune_mesh(mesh, dense / "fused.ply", mvs / "scene_mesh_pruned.ply", strict=3.0 if strict else None,
-                          log=log)
+        mesh = prune_mesh(mesh, core, mvs / "scene_mesh_pruned.ply", strict=3.0 if strict else None,
+                          min_step=cell / 2, log=log)
     else:
         _run([_bin("ReconstructMesh"), str(dense_scene),
               "-o", str(mvs / "scene_mesh.mvs")] + common, mvs, log, logf)

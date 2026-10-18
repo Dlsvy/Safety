@@ -109,6 +109,8 @@ def write(out: Path, rep: dict, work: Path, log=print) -> Path:
     m = g.get("method", "")
     if m.startswith("none"):
         row("축척·정확도", "실제 크기", "미확정(임의 단위)", BAD, "마커·줄자 거리·GCP 중 하나가 필요합니다")
+    elif m == "ai_metric_estimate":
+        row("축척·정확도", "실제 크기", "AI 추정 미터(개략)", WARN, "사진이 적어 MapAnything 이 크기를 추정 — 수~10% 오차 가능, 치수가 중요하면 마커·줄자")
     else:
         row("축척·정확도", "축척 방법", m, INFO, "")
         errs = [abs(r["error_mm"]) for r in g.get("check_distances", [])]

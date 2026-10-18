@@ -22,6 +22,11 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 ITERATIONS = 30_000
+# 학습 일정(train.py OptimizationParams 기본값, 30,000스텝 기준). 스텝을 줄이면 같은 비율로 당긴다.
+# 간격값(densification_interval·intervall_add_triangles 500)·densify_from_iter 는 그대로 둔다.
+SCHEDULE = {"position_lr_max_steps": 30_000, "densify_until_iter": 10_000, "iteration_mesh": 5_000,
+            "start_opacity_floor": 5_000, "start_pruning": 4_000, "sigma_until": 30_000,
+            "final_opacity_iter": 24_000, "start_upsampling": 20_000, "start_vertex_opt": 12_000}
 
 
 def find_meshsplat() -> tuple[str, Path] | None:
@@ -55,7 +60,8 @@ def _crop(m, sparse: Path, pad: float = 0.05) -> int:
     return int((~keep).sum())
 
 
-def run(dense: Path, work: Path, max_side: int = 1600, log=print, timeout: float = 5 * 3600) -> Path | None:
+def run(dense: Path, work: Path, max_side: int = 1600, iterations: int = ITERATIONS, log=print,
+        timeout: float = 5 * 3600) -> Path | None:
     """MeshSplatting 학습 → 불투명 메쉬(PLY, 정점 색, 조밀복원 좌표 Z-up). 실패하면 None"""
     f = find_meshsplat()
     if f is None:
@@ -67,14 +73,17 @@ def run(dense: Path, work: Path, max_side: int = 1600, log=print, timeout: float
     logf = open(work / "meshsplat.log", "w", encoding="utf-8", errors="replace")
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
     train = [py, "train.py", "-s", str(data), "-m", str(model), "-r", str(r), "--data_device", "cpu",
-             "--iterations", str(ITERATIONS), "--test_iterations", "-1", "--save_iterations", str(ITERATIONS), "--quiet"]
-    log(f"  $ MeshSplatting 학습 {ITERATIONS}스텝(불투명 삼각형 + 델로네 연결, 해상도 1/{r})")
+             "--iterations", str(iterations), "--test_iterations", "-1", "--save_iterations", str(iterations), "--quiet"]
+    if iterations != ITERATIONS:
+        for k, v in SCHEDULE.items():
+            train += [f"--{k}", str(max(1, round(v * iterations / ITERATIONS)))]
+    log(f"  $ MeshSplatting 학습 {iterations}스텝(불투명 삼각형 + 델로네 연결, 해상도 1/{r})")
     out = work / "mesh.ply"
     try:
         rc = subprocess.run(train, cwd=d, stdout=logf, stderr=subprocess.STDOUT, env=env, timeout=timeout).returncode
         if rc != 0:
             raise RuntimeError(f"학습 종료코드 {rc}")
-        it = model / "point_cloud" / f"iteration_{ITERATIONS}"
+        it = model / "point_cloud" / f"iteration_{iterations}"
         if not (it / "point_cloud_state_dict.pt").exists():
             raise RuntimeError("학습 결과(point_cloud_state_dict.pt) 없음")
         rc = subprocess.run([py, "create_ply.py", str(it), "--out", str(out)], cwd=d, stdout=logf,
@@ -94,13 +103,21 @@ def opaque_model(mesh_ply: Path, dense: Path, glb: Path, log=print) -> dict | No
     """MeshSplatting 메쉬 → 범위 밖 정리·부스러기 제거 → 사진 텍스처(정점 색보다 선명) → Y-up GLB"""
     import trimesh
     from .export import ZUP_TO_YUP
-    from .mvs import _fix_topology
     from .texture import bake
     m = trimesh.load(mesh_ply, process=False, force="mesh")
     n0 = len(m.faces)
     m = trimesh.Trimesh(m.vertices, m.faces, vertex_colors=m.visual.vertex_colors, process=True)  # 겹친 정점 합치기
     cut = _crop(m, dense / "sparse")
-    _fix_topology(m)
+    # 부스러기(50면 미만 덩어리)만 지운다. mvs._fix_topology 의 '나비 정점' 깎기는 OpenMVS 텍스처용인데,
+    # 구멍 가장자리가 많은 MeshSplatting 메쉬는 5번 깎는 동안 거의 다 사라졌다(1Family 839,195 → 2,668면).
+    # 덩어리는 '정점'으로 이어진 것으로 센다 — 삼각형들이 모서리 대신 꼭짓점을 공유해 모서리 기준이면 30만 조각으로 보인다
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    F, nv = np.asarray(m.faces), len(m.vertices)
+    e = np.concatenate([F[:, [0, 1]], F[:, [1, 2]]])
+    _, lab = connected_components(coo_matrix((np.ones(len(e)), (e[:, 0], e[:, 1])), shape=(nv, nv)), directed=False)
+    m.update_faces(np.bincount(lab[F[:, 0]])[lab[F[:, 0]]] >= 50)
+    m.remove_unreferenced_vertices()
     if len(m.faces) < 1000:
         log(f"  불투명 모델 생략: 정리 후 면 {len(m.faces)}개")
         return None

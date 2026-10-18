@@ -6,3 +6,4 @@ trimesh
 pillow
 fast-simplification
 embreex
+imageio-ffmpeg

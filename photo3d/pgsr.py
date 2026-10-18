@@ -88,13 +88,21 @@ def _scene_params(sparse: Path) -> dict:
             "ds": 1000.0 if max_depth < 60 else 60000.0 / max_depth}
 
 
+# 학습 일정(arguments OptimizationParams 기본값, 30,000스텝 기준). 스텝을 줄이면 같은 비율로 당긴다.
+# 특히 평면(single)·여러 사진 일치(multi) 손실은 기본이 7,000스텝부터라 빠른 모드(7,000스텝)에서는 한 번도 안 켜졌다
+# (로그 Single=0 Geo=0 Pho=0 — 사실상 일반 3DGS, 사진 8장 시험에서 TSDF 메쉬가 비어 실패)
+SCHEDULE = {"position_lr_max_steps": 30_000, "densify_until_iter": 15_000,
+            "single_view_weight_from_iter": 7_000, "multi_view_weight_from_iter": 7_000}
+
+
 def prep_data(dense: Path, work: Path, max_side: int) -> tuple[Path, int]:
-    """학습 데이터 폴더(work/data: sparse/0 + images) 와 해상도 배율(-r). 3DGS 계열 학습기가 공통으로 읽는 구조"""
+    """학습 데이터 폴더(work/data: sparse + sparse/0 + images) 와 해상도 배율(-r). 3DGS 계열 학습기가 공통으로 읽는 구조"""
     data = work / "data"
     if work.exists():
         shutil.rmtree(work)
     (data / "sparse" / "0").mkdir(parents=True)
-    for b in (dense / "sparse").glob("*.bin"):
+    for b in (dense / "sparse").glob("*.bin"):  # PGSR 은 sparse/, MeshSplatting 은 sparse/0/ 에서 읽는다
+        shutil.copy2(b, data / "sparse" / b.name)
         shutil.copy2(b, data / "sparse" / "0" / b.name)
     try:
         os.symlink(dense / "images", data / "images", target_is_directory=True)
@@ -122,6 +130,9 @@ def run(dense: Path, work: Path, iterations: int = 30000, max_side: int = 1600, 
              "--max_abs_split_points", "0", "--opacity_cull_threshold", "0.05", "--data_device", "cpu",
              "--exposure_compensation", "--multi_view_max_dis", f"{prm['mv_max']:.4f}",
              "--multi_view_min_dis", f"{prm['mv_min']:.4f}", "--test_iterations", "-1", "--save_iterations", str(iterations), "--quiet"]
+    if iterations != 30_000:
+        for k, v in SCHEDULE.items():
+            train += [f"--{k}", str(max(1, round(v * iterations / 30_000)))]
     log(f"  $ PGSR 학습 {iterations}스텝(평면 가우시안 + 여러 사진 일치, 해상도 1/{r}, 이웃 사진 거리 {prm['mv_max']:.2f}m)")
     try:
         rc = subprocess.run(train, cwd=d, stdout=logf, stderr=subprocess.STDOUT, env=env, timeout=timeout).returncode
@@ -140,4 +151,12 @@ def run(dense: Path, work: Path, iterations: int = 30000, max_side: int = 1600, 
         return None
     logf.close()
     m = model / "mesh" / "tsdf_fusion.ply"  # 후처리본(가장 큰 덩어리 1개만)이 아닌 원본 — 정리는 우리가
-    return m if m.exists() else None
+    if not m.exists():
+        return None
+    import trimesh
+    nf = len(trimesh.load(m, process=False, force="mesh").faces)
+    if nf < 5000:  # open3d 0.20(윈도우) TSDF 는 면이 수십 개만 나왔다 — 이런 결과를 형태 메쉬로 쓰지 않는다
+        log(f"  PGSR 메쉬가 비었음(면 {nf}개) → 사용 안 함 (PGSR venv 의 open3d 가 0.19.0 인지 확인)")
+        return None
+    log(f"  PGSR 메쉬: 면 {nf:,}")
+    return m

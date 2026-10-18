@@ -62,13 +62,14 @@ button:disabled{opacity:.45}
   <button class="big primary" id="bHybrid">🎬 영상 + 자동 사진 <span class="muted" style="color:#151719">(추천)</span></button>
   <button class="big" id="bPhoto">📷 자동 사진만</button>
   <button class="big" id="bVideo">🎥 동영상 촬영</button>
+  <button class="big" id="bSpot">🧭 공간 스캔 <span class="muted">(실내·좁은 곳)</span></button>
   <div class="row">
     <label class="btn" for="fCam">📸 기본 카메라</label>
     <label class="btn" for="fPick">🖼 앨범에서 고르기</label>
   </div>
   <input type="file" id="fCam" accept="image/*" capture="environment" hidden>
   <input type="file" id="fPick" accept="image/*,video/*" multiple hidden>
-  <div id="secwarn" class="warn" hidden>자동 촬영·동영상은 보안 연결(https)에서만 됩니다. PC 화면 <b>폰 연결</b>의 QR(①번 또는 ②번)로 다시 여세요.
+  <div id="secwarn" class="warn" hidden>자동 촬영·동영상은 보안 연결(https)에서만 됩니다. PC 화면 <b>폰 연결</b>의 QR 로 다시 여세요.
     지금은 <b>기본 카메라</b>·<b>앨범</b>으로 올릴 수 있습니다.</div>
   <div id="cur"></div>
   <h2>최근 3D</h2>
@@ -76,7 +77,9 @@ button:disabled{opacity:.45}
   <h2>촬영 요령(앱이 자동으로 도와줍니다)</h2>
   <div class="muted">· 건물 둘레를 <b>천천히 걸으며</b> 한 바퀴(높은 건물은 두 바퀴: 멀리서 한 번, 가까이서 한 번)<br>
     · 제자리에서 돌지 말고 <b>옆으로 걸으세요</b> — 앱이 겹침 70~80%마다 알아서 찍습니다<br>
-    · 흔들리거나 흐린 순간은 앱이 건너뜁니다 · 역광·유리·물웅덩이는 피하기</div>
+    · 흔들리거나 흐린 순간은 앱이 건너뜁니다 · 역광·유리·물웅덩이는 피하기<br>
+    · <b>공간 스캔</b>: 한 곳에 서서 폰을 몸 앞으로 내밀고 몸을 천천히 돌리면 12장이 자동으로 찍힙니다 →
+      1.5~2m 옮겨 다시 한 바퀴. 방·복도·현장 내부처럼 둘레를 돌 수 없는 곳에 씁니다</div>
 </main>
 
 <section id="cam" hidden>
@@ -129,8 +132,11 @@ const show = (id) => { for (const s of ["home", "cam", "done", "pair"]) $(s).hid
 const ls = { get: (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
              set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
 
+// 연결 코드: QR 주소(?t=)에서 받아 폰에 저장하고 모든 요청에 함께 보낸다(쿠키를 막거나 따로 쓰는 브라우저 대비)
+const TOK = (() => { const q = new URLSearchParams(location.search).get("t"); if (q) ls.set("p3d_tok", q); return q || ls.get("p3d_tok", ""); })();
+const withTok = (u) => TOK ? u + (u.includes("?") ? "&" : "?") + "t=" + encodeURIComponent(TOK) : u;
 async function api(path, opt = {}) {
-  const r = await fetch(path, {credentials: "same-origin", ...opt});
+  const r = await fetch(path, {credentials: "same-origin", ...opt, headers: {...(opt.headers || {}), "X-P3D-Token": TOK}});
   const j = await r.json().catch(() => ({}));
   if (r.status === 401 && j.need_pair) { show("pair"); throw new Error("연결 필요"); }
   if (!r.ok) throw new Error(j.error || r.statusText);
@@ -175,7 +181,7 @@ async function sendRec(r) {
   const CH = 4 << 20; let off = r.sent || 0;
   while (off < r.blob.size) {
     const res = await fetch(`/api/jobs/${r.job}/files?name=${encodeURIComponent(r.name)}&offset=${off}`,
-                            {method: "PUT", body: r.blob.slice(off, off + CH), credentials: "same-origin"});
+                            {method: "PUT", body: r.blob.slice(off, off + CH), credentials: "same-origin", headers: {"X-P3D-Token": TOK}});
     const j = await res.json().catch(() => ({}));
     if (res.status === 409 && typeof j.size === "number") { off = Math.min(j.size, r.blob.size); r.sent = off; await qPut(r); continue; }
     if (res.status === 401) { show("pair"); throw new Error("연결 필요"); }
@@ -359,6 +365,7 @@ function tick() {
   }
   if (mode === "hybrid" && rec) $("recI").textContent = `● ${fmtT((now - recT0) / 1000)}`;
   if (!A.auto) { guide("", ""); return; }
+  if (mode === "spot") return spotTick(now, steady, sharpOk, shaky);
   if (A.shots === 0) {
     if (steady && sharpOk && now - A.lastShot > 800) return shoot("첫 장");
     return guide("건물을 화면에 담고 잠깐 멈추세요", "자동으로 첫 장을 찍습니다");
@@ -371,7 +378,7 @@ function tick() {
   if (ov < 0.5) return guide("너무 빨라요! 천천히", "겹침이 부족하면 3D 에 구멍이 납니다", "var(--bad)");
   guide("옆으로 천천히 걸으세요", `겹침 ${Math.round(ov * 100)}% · 75% 에서 자동 촬영`);
 }
-async function shoot(why) {
+async function shoot(why, tag) {
   A.lastShot = performance.now(); A.cx = 0; A.cy = 0; A.key = A.prev;
   $("flash").style.opacity = 0.6; setTimeout(() => { $("flash").style.opacity = 0; }, 90);
   try { navigator.vibrate && navigator.vibrate(25); } catch {}
@@ -381,12 +388,45 @@ async function shoot(why) {
   A.shots++; $("cnt").textContent = `${A.shots}장`;
   if (SEN.heading !== null) A.bins[Math.floor(SEN.heading / 15) % 24]++;
   drawRing(); lockWhiteBalance();
-  const t = new Date(), nm = `p3d_${t.toISOString().slice(0, 19).replace(/[-:T]/g, "")}_${String(A.shots).padStart(4, "0")}.jpg`;
+  const t = new Date(), nm = `p3d_${tag ? tag + "_" : ""}${t.toISOString().slice(0, 19).replace(/[-:T]/g, "")}_${String(A.shots).padStart(4, "0")}.jpg`;
   enqueue(blob, nm, gps);
   if (why === "빨랐음") guide("조금 빨랐어요 — 천천히", "", "var(--bad)");
 }
+/* ── 공간 스캔(메타포트 방식): 한 위치에서 제자리 한 바퀴(30°마다 12장) → 1.5~2m 이동 → 반복 ──
+   폰을 몸 앞으로 내밀고(반지름 30~50cm) 몸을 돌리면 같은 위치 안에서도 시점이 조금씩 달라져 깊이가 잡히고,
+   위치 사이 1.5~2m 이동이 큰 시차를 준다. 나침반이 없으면 화면 이동량(겹침 70%)으로 대신한다. */
+const SP = {n: 12, spot: 1, done: new Set(), wait: false, cnt: 0};
+function spotTick(now, steady, sharpOk, shaky) {
+  if (SP.wait) return guide(`위치 ${SP.spot - 1} 완료 ✓`, "1.5~2m 옮긴 뒤 아래 찍기 버튼을 한 번 누르세요 (다 찍었으면 '완료')", "var(--accent)");
+  if (shaky) return guide("천천히 — 잠깐 멈추세요", "멈추면 자동으로 찍습니다", "var(--bad)");
+  if (!sharpOk) return guide("초점 맞추는 중…", "", "#f2b70588");
+  const ready = steady && now - A.lastShot > 500;
+  if (SEN.heading === null) {  // 나침반 없음: 옆으로 70% 겹침마다
+    if (SP.cnt === 0 ? ready : (Math.abs(A.cx) >= 0.3 && ready)) { SP.cnt++; shoot("", `s${String(SP.spot).padStart(2, "0")}`); }
+  } else {
+    const step = 360 / SP.n, idx = Math.round(SEN.heading / step) % SP.n;
+    const off = Math.abs(((SEN.heading - idx * step) % 360 + 540) % 360 - 180);
+    if (!SP.done.has(idx) && off < 7 && ready) { SP.done.add(idx); SP.cnt++; shoot("", `s${String(SP.spot).padStart(2, "0")}`); }
+  }
+  if (SP.cnt >= SP.n) {
+    SP.wait = true; SP.spot++; SP.cnt = 0; SP.done.clear();
+    try { navigator.vibrate && navigator.vibrate([60, 40, 60, 40, 120]); } catch {}
+    return;
+  }
+  guide(`위치 ${SP.spot} · ${SP.cnt}/${SP.n}장`, "폰을 몸 앞으로 내밀고 몸을 오른쪽으로 천천히 돌리세요 — 칸이 다 차면 다음 위치로");
+  drawRing();
+}
 function drawRing() {  // 바깥 링: 방향별로 찍은 구간(한 바퀴 진행) — 나침반 없으면 장수만
   const s = $("ring"); let h = "";
+  if (mode === "spot") {  // 공간 스캔: 지금 위치의 12방향 칸 + 지금 향하는 방향
+    for (let i = 0; i < SP.n; i++) {
+      const a = (i * 30 - 90) * Math.PI / 180;
+      h += `<circle cx="${(28 * Math.cos(a)).toFixed(1)}" cy="${(28 * Math.sin(a)).toFixed(1)}" r="4.5" fill="${SP.done.has(i) || (SEN.heading === null && i < SP.cnt) ? "#5fbf86" : "#ffffff40"}"/>`;
+    }
+    if (SEN.heading !== null) { const a = (SEN.heading - 90) * Math.PI / 180; h += `<line x1="0" y1="0" x2="${(20 * Math.cos(a)).toFixed(1)}" y2="${(20 * Math.sin(a)).toFixed(1)}" stroke="#f2b705" stroke-width="3"/>`; }
+    h += `<text x="0" y="5" fill="#fff" font-size="14" font-weight="700" text-anchor="middle">${SP.spot}</text>`;
+    s.innerHTML = h; return;
+  }
   const cov = A.bins.filter((b) => b > 0).length;
   for (let i = 0; i < 24; i++) {
     const a0 = (i * 15 - 90) * Math.PI / 180, a1 = ((i + 1) * 15 - 91) * Math.PI / 180;
@@ -429,7 +469,9 @@ async function startCapture(kind) {
   try { await ensureJob(); } catch (e) { alert("PC 에 연결할 수 없습니다: " + e.message); return; }
   show("cam"); guide("카메라 준비 중…");
   Object.assign(A, {prev: null, cx: 0, cy: 0, sharpHist: [], lastShot: 0, shots: 0, key: null, steadySince: performance.now()});
-  A.bins.fill(0); wbLocked = false; drawRing();
+  A.bins.fill(0); wbLocked = false;
+  if (kind === "spot" && SP.cnt) SP.cnt = 0, SP.done.clear();  // '더 찍기': 위치 번호는 이어서, 하다 만 한 바퀴는 처음부터
+  drawRing();
   $("cnt").textContent = kind === "video" ? "영상 0개" : "0장";
   $("autoB").hidden = kind === "video";
   try { await openCamera(kind); }
@@ -446,19 +488,22 @@ function stopCapture() {
 $("bPhoto").onclick = () => startCapture("photo");
 $("bHybrid").onclick = () => startCapture("hybrid");
 $("bVideo").onclick = () => startCapture("video");
+$("bSpot").onclick = () => { Object.assign(SP, {spot: 1, done: new Set(), wait: false, cnt: 0}); startCapture("spot"); };
 $("autoB").onclick = () => { A.auto = !A.auto; $("autoB").textContent = A.auto ? "자동 ON" : "자동 OFF"; $("autoB").classList.toggle("on", A.auto); };
 $("shut").onclick = () => {
   if (mode === "video") { rec ? rec.stop() : startRec(); return; }
-  shoot("");
+  if (mode === "spot" && SP.wait) { SP.wait = false; A.cx = A.cy = 0; A.lastShot = 0; return; }  // 다음 위치 시작
+  shoot("", mode === "spot" ? `s${String(SP.spot).padStart(2, "0")}` : "");
 };
 $("endB").onclick = async () => { stopCapture(); await sleep(300); toDone(); };
 function toDone() {
   const cur = ST.get(); if (!cur) { show("home"); return; }
   $("dName").textContent = cur.name;
   const n = cur.total || 0, warn = [];
-  if (mode !== "video" && n && n < 20) warn.push(`사진이 ${n}장으로 적습니다. 3D 가 끊길 수 있어요 — 40장 이상 권장(<b>더 찍기</b>)`);
+  if (mode !== "video" && n && n < 20) warn.push(n < 3 ? `사진이 ${n}장입니다 — 최소 3장이 필요합니다(<b>더 찍기</b>)` : `사진 ${n}장 — 적은 장수 방식으로 3D 를 만듭니다. 같은 곳을 조금씩 옆으로 옮기며 찍은 사진일수록 정확하고, 20장 이상이면 더 정밀합니다.`);
   const cov = A.bins.filter((b) => b > 0).length;
-  if (mode !== "video" && SEN.heading !== null && cov < 18 && n >= 20) warn.push(`둘레의 ${Math.round(100 * cov / 24)}% 만 찍었습니다. 한 바퀴를 다 돌면 빈 면이 없습니다.`);
+  if (mode === "spot" && SP.spot - 1 < 2) warn.push("공간 스캔은 위치 2곳 이상이어야 깊이가 잡힙니다 — <b>더 찍기</b>로 1.5~2m 옮겨 한 바퀴 더");
+  if (mode !== "video" && mode !== "spot" && SEN.heading !== null && cov < 18 && n >= 20) warn.push(`둘레의 ${Math.round(100 * cov / 24)}% 만 찍었습니다. 한 바퀴를 다 돌면 빈 면이 없습니다.`);
   $("dWarn").innerHTML = warn.map((w) => `<div class="warn">${w}</div>`).join("");
   show("done"); pump();
 }
@@ -493,7 +538,7 @@ async function refreshJobs() {
       c.innerHTML = `<div class="t">${esc(j.name)}</div>
         <div class="st-${j.status}">${LABEL[j.status] || j.status}${j.status === "running" && j.eta_min ? ` · 약 ${j.eta_min}분 남음` : ""}${j.wait_info ? " · " + esc(j.wait_info) : ""}</div>
         ${j.status === "running" || j.status === "queued" ? `<div class="bar"><i style="width:${pct}%"></i></div><div class="muted">${esc(j.last_log || "")}</div>` : ""}
-        ${j.status === "done" ? `<div class="row" style="margin-top:8px"><a class="btn" href="/?job=${j.id}">3D 보기</a><a class="btn" href="/api/jobs/${j.id}/unitypackage">유니티 파일</a></div>` : ""}
+        ${j.status === "done" ? `<div class="row" style="margin-top:8px"><a class="btn" href="${withTok(`/?job=${j.id}`)}">3D 보기</a><a class="btn" href="${withTok(`/api/jobs/${j.id}/unitypackage`)}">유니티 파일</a></div>` : ""}
         ${j.status === "failed" && j.error ? `<div class="muted">${esc(j.error)}</div>` : ""}`;
       box.append(c);
       if (known[j.id] && known[j.id] !== "done" && j.status === "done") notify(`3D 완성: ${j.name}`);
@@ -514,10 +559,29 @@ function notify(t) {
 const esc = (s) => String(s || "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 function defaultName() { const t = new Date(); return `현장 ${t.getMonth() + 1}/${t.getDate()} ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`; }
 
+// 카카오톡·네이버·인스타 등 앱 안 브라우저: 카메라·저장이 막히는 경우가 많다 → 기본 브라우저로 바로 넘긴다
+function inAppBrowser() {
+  const ua = navigator.userAgent;
+  if (!/KAKAOTALK|NAVER|Instagram|FBAN|FBAV|Line\/|DaumApps|everytimeApp|SamsungBrowser\/.*CrossApp/i.test(ua)) return false;
+  const here = location.href;
+  if (/KAKAOTALK/i.test(ua)) { location.href = "kakaotalk://web/openExternal?url=" + encodeURIComponent(here); }
+  else if (/Android/i.test(ua)) { location.href = `intent://${location.host}${location.pathname}${location.search}#Intent;scheme=https;package=com.android.chrome;end`; }
+  else { show("pair"); $("pair").innerHTML = `<h1>사파리로 열어 주세요</h1><p>이 앱 안의 브라우저에서는 카메라를 쓸 수 없습니다.</p>
+    <p>오른쪽 아래(또는 위) <b>…/공유 → Safari로 열기</b>를 누르세요.</p><p class="muted">${esc(here)}</p>`; return true; }
+  setTimeout(() => { show("pair"); $("pair").innerHTML = `<h1>기본 브라우저로 여는 중…</h1>
+    <p>안 넘어가면 메뉴(⋮)에서 <b>다른 브라우저로 열기</b>를 누르세요.</p>`; }, 300);
+  return true;
+}
+
 (async function init() {
-  if (location.search.includes("t=")) history.replaceState(null, "", "/m");  // 연결 코드는 쿠키로 기억 — 주소창에서 지움
+  if (inAppBrowser()) return;
+  // 주소에 연결 코드를 남겨 둔다 — '홈 화면에 추가'가 지금 주소를 저장하므로 코드가 있어야 나중에 바로 열린다
+  if (TOK) {
+    history.replaceState(null, "", withTok("/m"));
+    const ml = document.querySelector('link[rel="manifest"]'); if (ml) ml.href = withTok("/m/manifest.webmanifest");
+  }
   $("name").value = defaultName();
-  if (!window.isSecureContext || !navigator.mediaDevices) { $("secwarn").hidden = false; $("bPhoto").disabled = $("bVideo").disabled = $("bHybrid").disabled = true; }
+  if (!window.isSecureContext || !navigator.mediaDevices) { $("secwarn").hidden = false; $("bPhoto").disabled = $("bVideo").disabled = $("bHybrid").disabled = $("bSpot").disabled = true; }
   if ("serviceWorker" in navigator && window.isSecureContext) navigator.serviceWorker.register("/m/sw.js", {scope: "/m"}).catch(() => {});
   show("home");
   await refreshJobs(); pump();

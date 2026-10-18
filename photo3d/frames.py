@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 import json
 from pathlib import Path
 
@@ -152,27 +153,48 @@ def select_keyframes(cands: list[Path], scores: np.ndarray, target: int, min_tau
     return keep
 
 
-def _video_size(video: Path) -> tuple[int, int] | None:
+def ffmpeg_exe() -> str:
+    """ffmpeg 실행 파일. PATH 에 없으면 imageio-ffmpeg(ffmpeg 를 품은 파이썬 패키지)를 받아 쓴다.
+    (사용자 PC 에 ffmpeg 가 없어 폰에서 올린 동영상이 전부 실패했다 — 2026-10-18)"""
+    w = shutil.which("ffmpeg")
+    if w:
+        return w
     try:
-        o = subprocess.check_output(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-                                     "stream=width,height", "-of", "csv=p=0", str(video)]).decode().strip()
-        w, h = (int(x) for x in o.split(",")[:2])
-        return w, h
+        import imageio_ffmpeg
+    except ImportError:
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "imageio-ffmpeg"], capture_output=True)
+        import imageio_ffmpeg
+    return imageio_ffmpeg.get_ffmpeg_exe()
+
+
+def _video_size(video: Path) -> tuple[int, int] | None:
+    """화면 크기(회전 반영). 폰 세로 영상은 회전 정보로 세로가 되므로 ffmpeg 가 실제로 뽑는 첫 장면으로 잰다"""
+    try:
+        r = subprocess.run([ffmpeg_exe(), "-v", "error", "-i", str(video), "-frames:v", "1", "-f", "image2pipe",
+                            "-vcodec", "png", "-"], capture_output=True, timeout=60)
+        img = cv2.imdecode(np.frombuffer(r.stdout, np.uint8), cv2.IMREAD_REDUCED_COLOR_2)
+        if img is not None:
+            return img.shape[1] * 2, img.shape[0] * 2
     except Exception:
-        return None
+        pass
+    cap = cv2.VideoCapture(str(video))
+    w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cap.release()
+    return (w, h) if w and h else None
 
 
 def _duration(video: Path) -> float:
-    """영상 길이(초). 폰 브라우저 녹화(webm)는 머리말에 길이가 없어 'N/A' → 마지막 프레임 시각으로"""
-    out = subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                                   "-of", "default=nw=1:nk=1", str(video)]).decode().strip()
-    try:
-        return float(out)
-    except ValueError:
-        pts = subprocess.check_output(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-                                       "packet=pts_time", "-of", "csv=p=0", str(video)]).decode().split()
-        vals = [float(x.strip(",")) for x in pts if x.strip(",").replace(".", "", 1).isdigit()]
-        return max(vals) if vals else 0.0
+    """영상 길이(초). 폰 브라우저 녹화(webm)는 머리말에 길이가 없어(N/A) 끝까지 읽어 잰다"""
+    import re
+    r = subprocess.run([ffmpeg_exe(), "-hide_banner", "-i", str(video)], capture_output=True, timeout=60)
+    err = r.stderr.decode("utf-8", "replace")
+    m = re.search(r"Duration: (\d+):(\d+):([\d.]+)", err)
+    if m:
+        return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+    r = subprocess.run([ffmpeg_exe(), "-hide_banner", "-i", str(video), "-map", "0:v:0", "-c", "copy", "-f", "null", "-"],
+                       capture_output=True, timeout=600)
+    ts = re.findall(r"time=(\d+):(\d+):([\d.]+)", r.stderr.decode("utf-8", "replace"))
+    return int(ts[-1][0]) * 3600 + int(ts[-1][1]) * 60 + float(ts[-1][2]) if ts else 0.0
 
 
 def extract_video(video: Path, out_dir: Path, target_frames: int, max_side: int,
@@ -184,7 +206,7 @@ def extract_video(video: Path, out_dir: Path, target_frames: int, max_side: int,
     # 고를 프레임 1장당 후보 4장을 뽑는다
     fps = max(0.5, min(30.0, 4 * target_frames / max(dur, 1e-3)))
     scale = f"scale='if(gt(iw,ih),min({max_side},iw),-2)':'if(gt(iw,ih),-2,min({max_side},ih))'"
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(video), "-vf",
+    subprocess.run([ffmpeg_exe(), "-v", "error", "-y", "-i", str(video), "-vf",
                     f"fps={fps:.3f},{scale}", "-qscale:v", "2",
                     str(tmp / "f_%05d.jpg")], check=True)
     cands = sorted(tmp.glob("f_*.jpg"))
@@ -290,7 +312,7 @@ def prepare_inputs(inputs: list[Path], out_dir: Path, max_side: int = 3200,
     from . import cam360
     # 촬영 기종(사진 EXIF·영상 메타데이터·360 카메라 고유 문자열)
     models: dict = {}
-    for q in (photos[:40] + videos):
+    for q in (photos[:: max(1, len(photos) // 40)] + videos):  # 고르게 40장 안팎(드론·폰 섞인 경우도 잡히게)
         mdl = cam360.detect_model(q) or "알 수 없음"
         models[mdl] = models.get(mdl, 0) + 1
     if models:
@@ -410,7 +432,9 @@ def prepare_inputs(inputs: list[Path], out_dir: Path, max_side: int = 3200,
             "camera_model": "PINHOLE" if only_pano else None,
             "camera_params": (lambda z: f"{z / 2},{z / 2},{z / 2},{z / 2}")(next(iter(PANO_SIZES)))
             if only_pano and len(PANO_SIZES) == 1 else None,
-            "single_camera": pano_n == 0,
+            # 렌즈가 여럿(드론+폰, 사진+영상 프레임)이면 카메라 하나로 묶지 않는다 — MipMap 의 '공중·지상 통합'처럼
+            # 섞어 넣었을 때 렌즈 하나로 강제하면 정합이 깨진다. COLMAP 은 크기·초점이 같은 연속 사진끼리 렌즈를 공유한다
+            "single_camera": pano_n == 0 and len(models) <= 1 and not (photos and videos),
             # 리그 설정: 방향 폴더마다 카메라 하나, 첫 방향 기준 회전(이동 0)
             "rig": [{"prefix": view_folder(y, p) + "/", "cam_from_rig": pano_rotation(y, p).T.tolist()}
                     for (y, p) in PANO_VIEWS] if pano_n else None}

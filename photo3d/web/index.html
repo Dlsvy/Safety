@@ -229,16 +229,17 @@ canvas.spark.big{width:100%;height:34px}
   </header>
   <dialog id="phoned" aria-labelledby="phoneh">
     <h2 id="phoneh">폰 앱 연결</h2>
-    <p class="pmuted">폰 카메라로 아래 QR 을 찍으면 촬영 앱이 열립니다. 열린 화면에서 <b>홈 화면에 추가</b>하면 앱처럼 씁니다.
+    <p class="pmuted">폰 기본 카메라로 QR 을 찍고 나오는 주소를 누르면 바로 촬영 앱이 열립니다(와이파이·LTE 어디서나, 경고 없음).
       찍는 즉시 이 PC 로 올라오고, 다 찍으면 <b>3D 만들기</b> 한 번이면 끝납니다.</p>
     <div class="pgrid">
-      <div class="pcol"><h3>① 같은 와이파이</h3><div id="pqr1" class="pqr"></div>
+      <div class="pcol"><h3>이 QR 하나면 됩니다</h3><div id="pqr2" class="pqr"></div>
+        <p class="pmuted" id="pu2">어디서나 접속 주소를 만드는 중…</p>
+        <button id="tunb">어디서나 접속 끄기</button></div>
+      <div class="pcol"><h3>인터넷이 없을 때만: 같은 와이파이</h3><div id="pqr1" class="pqr"></div>
         <p class="pmuted" id="pu1"></p>
-        <p class="pmuted">처음 한 번 "안전하지 않음" 경고가 나오면 <b>고급 → 계속(안전하지 않음)</b>을 누르세요(이 PC 가 만든 인증서라 그렇습니다).</p></div>
-      <div class="pcol"><h3>② 현장에서(LTE 등 어디서나)</h3><div id="pqr2" class="pqr"></div>
-        <p class="pmuted" id="pu2">PC 와 이 앱을 켜 둔 채 현장에서 찍어 바로 올립니다.</p>
-        <button id="tunb">현장 접속 켜기</button></div>
+        <p class="pmuted">이 주소는 처음 한 번 "안전하지 않음" 경고가 나옵니다 → <b>고급 → 계속</b>(이 PC 가 만든 인증서라 그렇습니다).</p></div>
     </div>
+    <p class="pmuted">PC 앱을 다시 켜면 주소가 바뀝니다 — 홈 화면에 추가한 앱이 안 열리면 이 QR 을 한 번 더 찍으세요.</p>
     <p class="pmuted">연결 코드는 이 PC 전용입니다. QR 사진을 다른 사람과 공유하지 마세요.</p>
     <form method="dialog"><button>닫기</button></form>
   </dialog>
@@ -485,8 +486,9 @@ async function loadSamples() {
 }
 loadSamples();
 
+const P3D_TOK = (() => { try { const q = new URLSearchParams(location.search).get("t"); if (q) sessionStorage.setItem("p3d_tok", q); return q || sessionStorage.getItem("p3d_tok") || ""; } catch { return ""; } })();
 async function api(path, opt = {}) {
-  const r = await fetch(path, opt);
+  const r = await fetch(path, P3D_TOK ? {...opt, headers: {...(opt.headers || {}), "X-P3D-Token": P3D_TOK}} : opt);
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || r.statusText);
   return j;
@@ -687,6 +689,7 @@ async function loadPreview(id, L) {
 }
 
 /* ── 폰 연결(QR) ── */
+let phoneAuto = false;  // 이번 창에서 자동으로 한 번만 켠다(사용자가 끄면 다시 켜지 않음)
 async function phoneUpdate() {
   try {
     const d = await api("/api/mobile/info"), t = encodeURIComponent(d.token);
@@ -694,15 +697,20 @@ async function phoneUpdate() {
     const u1 = d.https[0] ? `${d.https[0]}/m?t=${t}` : (d.http[0] ? `${d.http[0]}/m?t=${t}` : "");
     qr("pqr1", u1); $("pu1").textContent = u1 ? u1.replace(/\?t=.*/, "") + (d.https[0] ? "" : " (보안 연결 없음 — 자동 촬영 대신 기본 카메라 사용)") : "와이파이 연결 없음";
     const tu = d.tunnel || {};
-    qr("pqr2", tu.url ? `${tu.url}/m?t=${t}` : "", tu.state === "starting" ? "주소 만드는 중…" : "아래 '현장 접속 켜기'를 누르면<br>QR 이 나옵니다");
-    $("pu2").textContent = tu.url ? tu.url : (tu.msg || "PC 와 이 앱을 켜 둔 채 현장에서 찍어 바로 올립니다.");
-    $("tunb").textContent = tu.state === "on" || tu.state === "starting" ? "현장 접속 끄기" : "현장 접속 켜기";
+    // 폰 연결 창을 열면 '어디서나 접속'(정식 인증서 https)을 자동으로 켠다 — QR 하나로 와이파이·LTE 모두, 카메라 경고 없음
+    if (!tu.state || tu.state === "off") {
+      if (!phoneAuto) { phoneAuto = true; await api("/api/mobile/tunnel", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({on: true})}).catch(() => {}); return phoneUpdate(); }
+    }
+    qr("pqr2", tu.url ? `${tu.url}/m?t=${t}` : "", tu.state === "starting" ? "주소 만드는 중… (10초 정도)" : tu.state === "error" ? "주소를 못 만들었습니다<br>오른쪽 와이파이 QR 을 쓰거나<br>아래 버튼으로 다시" : "아래 버튼을 누르면<br>QR 이 나옵니다");
+    $("pu2").textContent = tu.url ? tu.url : (tu.msg || "");
+    $("tunb").textContent = tu.state === "on" || tu.state === "starting" ? "어디서나 접속 끄기" : "어디서나 접속 켜기";
     $("tunb").dataset.on = tu.state === "on" || tu.state === "starting" ? "1" : "";
     if (tu.state === "starting" && $("phoned").open) setTimeout(phoneUpdate, 1500);
   } catch (e) { $("pu1").textContent = "연결 정보를 가져오지 못했습니다: " + e.message; }
 }
 $("phoneb").onclick = () => { $("phoned").showModal(); phoneUpdate(); };
 $("tunb").onclick = async () => {
+  phoneAuto = true;
   await api("/api/mobile/tunnel", {method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify({on: !$("tunb").dataset.on})}).catch((e) => alert(e.message));
   phoneUpdate();
