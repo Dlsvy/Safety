@@ -364,8 +364,8 @@ def run(a) -> dict:
                                           iterations=getattr(a, "pgsr_steps", 0) or (30000 if a.profile == "gpu-max" else 7000), log=log)
                             if gm is not None:
                                 rep["fuse"]["shape_mesh"] = "pgsr"
-                        if gm is None and a.profile == "fast" and not a.extras:
-                            log("  최적 합성 메쉬 생략(빠르게 — 측정 메쉬·스플랫은 그대로, 약 4분 절약)")
+                        if gm is None and not getattr(a, "best_mesh", True) and not a.extras:
+                            log("  최적 합성 메쉬 생략(아주 빠르게 — 측정 메쉬·스플랫은 그대로, 약 2~4분 절약)")
                         elif gm is None:
                             gm = splat.mesh_from_splat(side["splat"], work / "splat" / "gs_mesh", log=log)
                             if gm is not None:
@@ -484,6 +484,7 @@ def _apply_time_plan(a, prep: dict, img_dir: Path, work: Path, n_img: int, log=p
     a.prior = a.prior and st["prior"]
     a.extras = st["extras"]
     a.pgsr_steps, a.ms_steps = st["pgsr_steps"], st["ms_steps"]
+    a.best_mesh = st.get("best_mesh", True)
     if st["pm_size"]:
         os.environ["PHOTO3D_PM_MAX"] = str(min(int(os.environ.get("PHOTO3D_PM_MAX", "99999")), st["pm_size"]))
         os.environ["PHOTO3D_PM_SIZE"] = str(st["pm_size"])
