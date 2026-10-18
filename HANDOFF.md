@@ -130,6 +130,14 @@ README.md 에 전체 설명·검증 결과가 있다. 먼저 README 를 읽어�
   MapAnything 은 GPU 가 비어 있으면 8장 46초(불러오기 12 + 추론 28), Unity 에디터가 GPU 를 쓰면 3~8배 느려진다. 가중치를 받았으면 HF_HUB_OFFLINE=1.
 - 같은 파일(바이트 동일) 사진은 입력에서 한 장만(1Family 폴더: 240장이 8가지 사진 복사본 → 글로벌 매퍼가 4시간 반 멈춤).
 - single_camera 는 사진 크기가 모두 같을 때만(크기 다르면 COLMAP 이 CAMERA_SINGLE_DIM_ERROR 로 건너뜀 → 8/160장 등록).
+- **시간 기준 계획(timeplan.py)**: 목표 아주 빠르게 3~7분·빠르게 15~20분·최고 품질 50~70분. 사진 수·화소·이 PC 보정(speed)으로
+  단계별 예상 초를 계산하고, 목표 상한을 넘으면 쓸 사진 수를 줄인다(cli._apply_time_plan → 고르게 퍼진 선명한 사진,
+  work/plan.json). 계수는 이 PC 기록: 짝 맞추기 0.0083·n², 증분 매퍼 0.1·n^1.5, PatchMatch n·(3.15+0.508·이웃수)·(해상도/2000),
+  MoGe 0.8·n, MapAnything 20+0.5·n². 빠르게: 1600px·이웃 10장·매퍼 하나·흰 벽 채우기 켬·PGSR/MeshSplatting 은 선택(--extras).
+  최고 품질: 2400px·이웃 16장·스플랫 2만·PGSR 1만·MeshSplatting 1.5만(추가 기술만으로 넘치면 뺌).
+  앱: /api/plan(시작 전 예상·사진 수별 곡선), 화면에 사진 수 막대·그래프(눌러서 정함), use_images·extras 를 작업에 저장.
+  남은 시간은 plan.json 단계 + 처리 기록 표시글(PLAN_MARKS) + 실제 진행(깊이 지도 수·학습 스텝)으로(app.plan_progress),
+  끝나면 실제/계획 비율을 timing_history 에 남겨 다음 계획에 곱한다(plan_speed).
 - 주의: APP.bat 창이 두 개 뜨면 같은 app_data 를 같이 써서, 나중에 켜진 앱이 처리 중 작업을 '앱이 다시 시작되어 중단됨'으로 바꾼다.
 
 ## ▶ 지금 이어서 할 일 (2026-10-18 사용자 피드백 — 로컬 PC 세션에서 진행)

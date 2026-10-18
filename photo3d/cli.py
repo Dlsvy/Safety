@@ -137,8 +137,7 @@ def run(a) -> dict:
             log(f"  360° 사진/영상에서 원근 사진 {prep['pano_views']}장 생성")
         n_img = len(prep["images"])
         rec = st = None
-        if a.profile == "instant" and n_img > INSTANT_PICK and not prep.get("rig"):
-            n_img = _pick_for_instant(img_dir, work / "images_unused", log)
+        n_img = _apply_time_plan(a, prep, img_dir, work, n_img, log)
         if a.profile == "instant" and n_img <= 15 and not prep.get("rig") and fewshot.find() is not None:
             fs = fewshot.run(img_dir, work / "fewshot", use_gpu=a.gpu, log=log)  # COLMAP 시도 없이 바로(시간 절약)
             if fs is not None:
@@ -360,9 +359,9 @@ def run(a) -> dict:
                         # 형태 메쉬: PGSR(평면 가우시안, 설치돼 있으면 — 가장 정확) → 없거나 실패하면 Spirula 메쉬
                         from . import pgsr
                         gm = None
-                        if pgsr.find_pgsr() is not None and a.profile != "instant":
+                        if pgsr.find_pgsr() is not None and a.extras and a.profile != "instant":
                             gm = pgsr.run(work / "dense", work / "pgsr",
-                                          iterations=30000 if a.profile == "gpu-max" else 7000, log=log)
+                                          iterations=getattr(a, "pgsr_steps", 0) or (30000 if a.profile == "gpu-max" else 7000), log=log)
                             if gm is not None:
                                 rep["fuse"]["shape_mesh"] = "pgsr"
                         if gm is None:
@@ -390,9 +389,9 @@ def run(a) -> dict:
                     # 보이는 모델: MeshSplatting 불투명 메쉬(설치돼 있을 때 — 빠른 모드는 일정을 1/3 로 당겨 10,000스텝)
                     try:
                         from . import meshsplat
-                        if meshsplat.find_meshsplat() is not None and a.profile != "instant":
+                        if meshsplat.find_meshsplat() is not None and a.extras and a.profile != "instant":
                             mp = meshsplat.run(work / "dense", work / "meshsplat", log=log,
-                                               iterations=10_000 if a.profile == "fast" else meshsplat.ITERATIONS)
+                                               iterations=getattr(a, "ms_steps", 0) or (10_000 if a.profile == "fast" else meshsplat.ITERATIONS))
                             oi = mp and meshsplat.opaque_model(mp, work / "dense", out / "site_opaque_mesh.glb", log=log)
                             if oi:
                                 rep["fuse"]["opaque_mesh"] = oi
@@ -439,26 +438,57 @@ def run(a) -> dict:
     return rep
 
 
-INSTANT_PICK = 12  # 아주 빠르게: 사진이 많아도 이만큼만 골라 쓴다(MapAnything 한 번에, 8GB VRAM 에서 1~3분)
-
-
-def _pick_for_instant(img_dir: Path, spare: Path, log=print) -> int:
-    """아주 빠르게: 찍은 순서(이름 순)로 INSTANT_PICK 구간을 나누고 구간마다 가장 선명한 사진 한 장을 고른다
+def _pick_images(img_dir: Path, spare: Path, n_keep: int, log=print) -> int:
+    """찍은 순서(이름 순)로 n_keep 구간을 나누고 구간마다 가장 선명한 사진 한 장을 고른다
     → 흔들린 사진은 빠지고 현장을 고르게 덮는다. 나머지는 spare 로 옮겨 둔다(지우지 않음). 남은 장수를 돌려준다."""
     import shutil
     from . import frames
     imgs = sorted(p for p in img_dir.iterdir() if p.suffix.lower() in (".jpg", ".jpeg", ".png"))
-    if len(imgs) <= INSTANT_PICK:
+    if len(imgs) <= n_keep:
         return len(imgs)
     sc = np.array([frames.sharpness(p) for p in imgs])
-    edges = np.linspace(0, len(imgs), INSTANT_PICK + 1).round().astype(int)
+    edges = np.linspace(0, len(imgs), n_keep + 1).round().astype(int)
     keep = {int(lo + np.argmax(sc[lo:hi])) for lo, hi in zip(edges[:-1], edges[1:]) if hi > lo}
     spare.mkdir(parents=True, exist_ok=True)
     for i, p in enumerate(imgs):
         if i not in keep:
             shutil.move(str(p), spare / p.name)
-    log(f"  아주 빠르게: 사진 {len(imgs)}장 중 고르게 퍼진 선명한 {len(keep)}장만 사용(나머지는 images_unused)")
+    log(f"  사진 {len(imgs)}장 중 고르게 퍼진 선명한 {len(keep)}장 사용(나머지는 images_unused)")
     return len(keep)
+
+
+def _apply_time_plan(a, prep: dict, img_dir: Path, work: Path, n_img: int, log=print) -> int:
+    """모드별 목표 시간(아주 빠르게 3~7분·빠르게 15~20분·최고 품질 50~70분)에 맞춰 쓸 사진 수와 설정을 정한다(timeplan).
+    사용자가 사진 수(--use-images)나 추가 기술(--extras)을 정했으면 그대로 따른다. 계획은 work/plan.json(남은 시간 계산용)."""
+    from . import timeplan
+    mode = {"instant": "instant", "fast": "fast", "gpu-max": "best"}.get(a.profile)
+    if mode is None or prep.get("rig") or prep.get("pano_views"):
+        return n_img  # 360 리그·펼친 사진은 방향 묶음이 깨지지 않게 그대로
+    mp = 2.0
+    try:
+        from PIL import Image
+        imgs = sorted(img_dir.iterdir())[:: max(1, n_img // 8)]
+        mp = float(np.mean([np.prod(Image.open(q).size) for q in imgs])) / 1e6
+    except Exception:
+        pass
+    speed = float(os.environ.get("PHOTO3D_SPEED", "1") or 1)
+    tp = timeplan.plan(n_img, mode, a.pipeline, a.use_images, a.extras_user, mp, speed)
+    log("  " + timeplan.fmt(tp))
+    if tp["n_use"] < n_img:
+        n_img = _pick_images(img_dir, work / "images_unused", tp["n_use"], log)
+    st = tp["settings"]
+    a.prior = a.prior and st["prior"]
+    a.extras = st["extras"]
+    a.pgsr_steps, a.ms_steps = st["pgsr_steps"], st["ms_steps"]
+    if st["pm_size"]:
+        os.environ["PHOTO3D_PM_MAX"] = str(min(int(os.environ.get("PHOTO3D_PM_MAX", "99999")), st["pm_size"]))
+    if st["pm_src"]:
+        os.environ["PHOTO3D_PM_SRC"] = str(st["pm_src"])
+    os.environ["PHOTO3D_SPIRULA_STEPS"] = str(st["splat_steps"])
+    os.environ["PHOTO3D_SPIRULA_CAP"] = str(st["splat_cap"])
+    (work / "plan.json").write_text(json.dumps({**tp, "n_use": n_img, "t0": time.time()}, ensure_ascii=False),
+                                    encoding="utf-8")
+    return n_img
 
 
 def grade(rep: dict) -> dict:
@@ -561,6 +591,10 @@ def main(argv=None):
     r.add_argument("--splat-res", type=int, default=1920, help="스플래팅 학습 이미지 최대 변 길이(px)")
     r.add_argument("--splat-aa", action="store_true",
                    help="Mip-Splatting 안티앨리어싱으로 학습(확대·축소 때 반짝임·계단 줄임, Spirula). 웹 뷰어도 같은 방식으로 그림")
+    r.add_argument("--use-images", type=int, default=None,
+                   help="쓸 사진 수(정하지 않으면 모드 목표 시간에 맞춰 자동). 많으면 고르게 퍼진 선명한 사진만 고른다")
+    r.add_argument("--extras", action="store_true", default=None,
+                   help="통합 탭: PGSR 평면 메쉬·MeshSplatting 불투명 모델까지(최고 품질은 기본으로 켬, 빠르게는 +20~40분)")
     r.add_argument("--pipeline", choices=["splat", "pg", "fuse"], default="splat",
                    help="splat: 메쉬 + 가우시안 스플래팅(실사 보기) / pg: 포토그래메트리 전용(측정용 메쉬·정사영상·DSM·점군, 스플랫 없음) / fuse: 통합 — 포토그래메트리 + 그 메쉬로 맞춘 스플랫")
     r.add_argument("--masks", help="마스크 폴더(<이미지명>.png, 검정=제외) — 움직이는 사람·장비 제거")
@@ -612,8 +646,8 @@ def main(argv=None):
             a.max_features = 8000
         if a.quality == "medium":
             a.quality = "draft"
-        if a.mapper == "incremental":
-            a.mapper = "global"
+        # 매퍼는 증분 하나만: 글로벌·증분을 둘 다 돌려 고르면 1Family 152장에서 글로벌 161초가 더 들었고
+        # 결과는 결국 증분을 썼다(최고 품질만 둘 다 비교)
         # 조밀복원은 COLMAP PatchMatch(GPU). OpenMVS v2.4.0 CUDA 빌드의 DensifyPointCloud 는
         # RTX 50(SM 12.0)에서 GPU 계산 시작 시 종료(PC 확인) → 메쉬·텍스처만 OpenMVS(CPU판)
         if a.dense == "openmvs" and a.colmap_bin:
@@ -633,6 +667,10 @@ def main(argv=None):
                 a.max_side = 2400
     if a.cmd == "run" and a.splat_aa:
         os.environ["PHOTO3D_SPLAT_MIP"] = "1"
+    if a.cmd == "run":
+        a.extras_user = a.extras  # 사용자가 정한 값(None = 계획에 맡김)
+    if a.cmd == "run" and a.extras is None:
+        a.extras = a.profile == "gpu-max"  # 빠르게(PGSR·MeshSplatting 이 20분 넘게 더 듦)·아주 빠르게는 선택할 때만
     if a.cmd == "run" and a.splat_steps < 0:
         a.splat_steps = {"instant": 3000, "fast": 7000, "gpu-max": 30000}.get(a.profile, 0)
     if a.cmd == "run" and not a.inputs and not a.from_colmap:

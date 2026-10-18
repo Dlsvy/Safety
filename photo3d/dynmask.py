@@ -14,7 +14,7 @@ import numpy as np
 COCO_MOVING = {1: "사람", 2: "자전거", 3: "차", 4: "오토바이", 6: "버스", 8: "트럭"}
 
 
-def make(img_dir: Path, out_dir: Path, score: float = 0.5, side: int = 1024, log=print) -> Path | None:
+def make(img_dir: Path, out_dir: Path, score: float = 0.5, side: int = 800, log=print) -> Path | None:
     """가린 사진이 하나라도 있으면 마스크 폴더, 아니면 None. 실패해도 None(마스크 없이 진행)"""
     try:
         import cv2

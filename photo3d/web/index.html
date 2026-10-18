@@ -62,6 +62,10 @@ button:focus-visible,.btn:focus-visible,input:focus-visible{outline:2px solid va
 .chosen{font-size:13px;color:var(--muted);margin:4px 0 10px}
 .mode{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:0 0 10px}
 @media (max-width:700px){.mode{grid-template-columns:1fr}}
+.plan{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:0 0 10px;font-size:13px;color:var(--muted)}
+.plan b{color:var(--ink)}.plan .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:6px 0}
+.plan input[type=range]{flex:1;min-width:160px;accent-color:var(--accent)}
+#planchart{width:100%;height:120px;cursor:crosshair;display:block}
 .mode label{border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;font-size:13px;color:var(--muted);display:flex;gap:8px;align-items:flex-start}
 .mode label strong{display:block;color:var(--ink);font-size:14px}
 .mode label:has(input:checked){border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
@@ -274,10 +278,18 @@ canvas.spark.big{width:100%;height:34px}
     <div class="samples" id="samples"></div>
     <div class="chosen" id="chosen">선택한 파일 없음 · 한쪽 면은 5~6장, 한 바퀴는 15~20장, 또는 1~2분 영상(천천히 걷기) · 360 카메라: 펼친 영상·사진(2:1) 또는 Insta360 원본(.insv·.insp)도 됩니다</div>
     <div class="mode" role="radiogroup" aria-label="품질">
-      <label><input type="radio" name="mode" value="instant"><span><strong>아주 빠르게</strong>약 3~7분 · 사진이 많아도 선명한 12장만 골라 형태 확인(AI 로 카메라·크기 추정)</span></label>
-      <label><input type="radio" name="mode" value="fast" checked><span><strong>빠르게</strong><span class="only-splat">약 5~10분 · 프로토타입(해상도 낮춤·구멍 메우기 생략)</span><span class="only-pg">약 10~15분 · 현장 검토용(2400px)</span><span class="only-fuse">약 15~25분 · 2400px</span></span></label>
-      <label><input type="radio" name="mode" value="best"><span><strong><span class="only-splat">최고 품질</span><span class="only-pg">정밀 측정</span><span class="only-fuse">최고 품질</span></strong><span class="only-splat">GPU 최대 · 15~30분</span><span class="only-pg">원본 해상도 · GPU 최대 · 20~40분</span><span class="only-fuse">원본 해상도 · GPU 최대 · 40~70분</span></span></label>
+      <label><input type="radio" name="mode" value="instant"><span><strong>아주 빠르게</strong>약 3~7분 · 선명한 12장만 골라 형태 확인(AI 로 카메라·크기 추정)</span></label>
+      <label><input type="radio" name="mode" value="fast" checked><span><strong>빠르게</strong><span class="only-splat">약 5~10분 · 프로토타입(해상도 낮춤·구멍 메우기 생략)</span><span class="only-pg">약 10~15분 · 현장 검토용(2400px)</span><span class="only-fuse">약 15~20분 · 사진 수를 시간에 맞춰 자동</span></span></label>
+      <label><input type="radio" name="mode" value="best"><span><strong><span class="only-splat">최고 품질</span><span class="only-pg">정밀 측정</span><span class="only-fuse">최고 품질</span></strong><span class="only-splat">GPU 최대 · 15~30분</span><span class="only-pg">원본 해상도 · GPU 최대 · 20~40분</span><span class="only-fuse">약 50~70분 · 고해상도 · PGSR·불투명 모델 포함</span></span></label>
     </div>
+    <div class="plan" id="planbox" hidden aria-live="polite">
+      <div id="plantxt"></div>
+      <div class="row"><span>쓸 사진 수</span><input type="range" id="planuse" min="3" max="100" step="1"><b id="planuseval"></b>
+        <button type="button" id="planauto">자동(목표 시간에 맞춤)</button></div>
+      <svg id="planchart" viewBox="0 0 600 120" preserveAspectRatio="none" aria-label="사진 수별 예상 시간 — 눌러서 사진 수 정하기"></svg>
+      <div id="planstages"></div>
+    </div>
+    <label class="subj only-fuse"><input type="checkbox" id="extras"> <strong>새 기술 포함</strong> — PGSR 평면 메쉬·MeshSplatting 불투명 모델까지(빠르게 +20~40분, 최고 품질은 항상 포함)</label>
     <label class="subj only-splat"><input type="checkbox" id="subject"> <strong>사람·물체 모드</strong> — 사람·장비·조형물처럼 가운데 대상 하나를 둘러 찍었을 때: 배경을 자동으로 빼고 대상만 선명하게(실사 보기)</label>
     <details class="guide"><summary>촬영 가이드 (현장 안전관리자용)</summary>
       <ol>
@@ -403,6 +415,7 @@ function setKind(k) {
   for (const b of document.querySelectorAll(".tabs [role=tab]")) b.setAttribute("aria-selected", b.dataset.kind === curKind);
   $("go").textContent = {pg: "포토그래메트리 3D 만들기", fuse: "통합 3D 만들기"}[curKind] || "3D 만들기";
   try { localStorage.setItem("kind", curKind); } catch (e) {}
+  setTimeout(() => planUpdate(), 0);  // 탭(분석 방식)에 따라 예상 시간이 달라진다
 }
 for (const b of document.querySelectorAll(".tabs [role=tab]")) b.onclick = () => setKind(b.dataset.kind);
 
@@ -412,7 +425,49 @@ function setPicked(list) {
   $("chosen").textContent = picked.length ? `${picked.length}개 선택 · ${mb.toFixed(1)} MB` : "선택한 파일 없음";
   updateGo();
 }
-function updateGo(){ $("go").disabled = !(picked.length || $("lpath").value.trim()); updatePhotos(); }
+function updateGo(){ $("go").disabled = !(picked.length || $("lpath").value.trim()); updatePhotos(); planUpdate(); }
+
+/* ── 시간 기준 계획: 모드 목표 시간에 맞춰 쓸 사진 수를 정하고, 사진 수를 바꾸면 예상 시간이 바로 바뀐다 ── */
+let planUse = null, planSeq = 0;  // null = 자동
+async function planUpdate() {
+  const lp = $("lpath").value.trim(), seq = ++planSeq;
+  if (!picked.length && !lp) { $("planbox").hidden = true; return; }
+  const mode = document.querySelector("input[name=mode]:checked").value;
+  const imgs = picked.filter((f) => /\.(jpe?g|png|heic|tiff?|webp)$/i.test(f.name)).length, vids = picked.length - imgs;
+  const qs = new URLSearchParams({mode, kind: curKind, extras: curKind === "fuse" && $("extras").checked ? "1" : "0"});
+  if (picked.length) qs.set("n", imgs + (vids ? Math.max(30, Math.floor(150 / vids)) * vids : 0)); else qs.set("path", lp);
+  if (planUse) qs.set("use", planUse);
+  let d; try { d = await api("/api/plan?" + qs); } catch (e) { $("planbox").hidden = true; return; }
+  if (seq !== planSeq) return;
+  const pl = d.plan, [lo, hi] = pl.target_min;
+  $("planbox").hidden = false;
+  $("plantxt").innerHTML = `사진 <b>${pl.n_avail}</b>장 중 <b>${pl.n_use}</b>장 사용 · 예상 <b>${Math.round(pl.total_min)}분</b>` +
+    ` (목표 ${lo}~${hi}분${planUse ? "" : " · 자동"})` + (pl.total_min > hi ? ` <span style="color:var(--bad)">목표보다 깁니다</span>` : "") +
+    (pl.speed !== 1 ? ` · 이 PC 기록 보정 ×${pl.speed}` : "");
+  const r = $("planuse"); r.min = Math.min(3, pl.n_avail); r.max = Math.max(pl.n_avail, 3); r.value = pl.n_use;
+  $("planuseval").textContent = `${pl.n_use}장`;
+  $("planstages").textContent = Object.entries(pl.stages_min).filter(([, v]) => v >= 0.5).sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => `${k} ${v.toFixed(v < 10 ? 1 : 0)}분`).join(" · ");
+  // 그래프: 가로 = 쓸 사진 수, 세로 = 예상 분, 노란 띠 = 목표 시간, 점 = 지금 선택
+  const c = d.curve, W = 600, H = 120, nMax = Math.max(...c.map((q) => q[0]), 1), nMin = Math.min(...c.map((q) => q[0]));
+  const yMax = Math.max(hi * 1.3, ...c.map((q) => q[1]));
+  const X = (n) => 30 + (W - 40) * (n - nMin) / Math.max(1, nMax - nMin), Y = (m) => H - 18 - (H - 28) * m / yMax;
+  let h = `<rect x="30" y="${Y(hi)}" width="${W - 40}" height="${Y(lo) - Y(hi)}" fill="var(--accent)" opacity=".18"/>`;
+  h += `<polyline fill="none" stroke="var(--accent)" stroke-width="2.5" points="${c.map((q) => `${X(q[0]).toFixed(1)},${Y(q[1]).toFixed(1)}`).join(" ")}"/>`;
+  h += `<circle cx="${X(pl.n_use)}" cy="${Y(pl.total_min)}" r="6" fill="var(--ink)" stroke="var(--accent)" stroke-width="2"/>`;
+  h += `<text x="2" y="${Y(hi) + 4}" font-size="11" fill="currentColor">${hi}분</text><text x="2" y="${Y(lo) + 4}" font-size="11" fill="currentColor">${lo}분</text>`;
+  h += `<text x="30" y="${H - 3}" font-size="11" fill="currentColor">${nMin}장</text><text x="${W - 10}" y="${H - 3}" font-size="11" fill="currentColor" text-anchor="end">${nMax}장</text>`;
+  $("planchart").innerHTML = h;
+  $("planchart").onclick = (e) => {
+    const b = $("planchart").getBoundingClientRect(), x = (e.clientX - b.left) / b.width * W;
+    planUse = Math.round(nMin + (x - 30) / (W - 40) * (nMax - nMin)); planUse = Math.max(nMin, Math.min(nMax, planUse)); planUpdate();
+  };
+}
+$("planuse").oninput = () => { $("planuseval").textContent = `${$("planuse").value}장`; };
+$("planuse").onchange = () => { planUse = +$("planuse").value; planUpdate(); };
+$("planauto").onclick = () => { planUse = null; planUpdate(); };
+for (const r of document.querySelectorAll("input[name=mode]")) r.addEventListener("change", () => { planUse = null; planUpdate(); });
+$("extras").addEventListener("change", planUpdate);
 $("files").onchange = (e) => setPicked(e.target.files);
 $("cam").onchange = (e) => setPicked([...picked, ...e.target.files]);
 const MEDIA_RE = /\.(jpe?g|png|heic|tiff?|webp|mp4|mov|m4v|avi|mkv)$/i;
@@ -503,7 +558,7 @@ $("go").onclick = async () => {
     const sc = $("scale").value.trim();
     const job = await api("/api/jobs", {method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({name: $("name").value || "현장", local_path: $("lpath").value.trim(),
-        scale: sc ? sc + "\n" : null, mode: document.querySelector("input[name=mode]:checked").value, kind: curKind, subject: curKind === "splat" && $("subject").checked, marker_size: parseFloat($("msize").value) || null})});
+        scale: sc ? sc + "\n" : null, mode: document.querySelector("input[name=mode]:checked").value, kind: curKind, subject: curKind === "splat" && $("subject").checked, extras: curKind === "fuse" && $("extras").checked, use_images: planUse, marker_size: parseFloat($("msize").value) || null})});
     const total = picked.reduce((a, f) => a + f.size, 0) || 1; let sent = 0;
     for (const [i, f] of picked.entries()) {
       $("msg").textContent = `올리는 중 ${i + 1}/${picked.length}: ${f.name}`;

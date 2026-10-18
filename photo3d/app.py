@@ -457,8 +457,14 @@ def record_timing(d: Path, job: dict) -> None:
             m = re.match(r"(\d)/5", name)
             if m:
                 st[m.group(1)] = float(sec)
+        row = {"mode": _mkey(job), "n": n, "s": st, "t": time.time()}
+        try:  # 계획 대비 실제 시간 비율 — 다음 계획에 곱한다(이 PC 속도·다른 프로그램의 GPU 사용 반영)
+            pl = json.loads((d / "out" / "work" / "plan.json").read_text(encoding="utf-8"))
+            row["ratio"] = round((job["finished"] - job["started"]) / 60 / max(pl["total_min"], 0.5), 3)
+        except Exception:
+            pass
         if n and st:
-            h = _hist()[-39:] + [{"mode": _mkey(job), "n": n, "s": st, "t": time.time()}]
+            h = _hist()[-39:] + [row]
             HIST.write_text(json.dumps(h, ensure_ascii=False), encoding="utf-8")
     except Exception:
         pass
@@ -499,6 +505,118 @@ def _n_images_raw(d: Path, lines: list[str], job: dict) -> int:
         return 30
 
 
+# 계획(work/plan.json)의 단계 → 처리 기록에서 그 단계가 시작됐음을 알리는 글귀(순서대로)
+PLAN_MARKS = [("입력 정리", "1/5 입력 정리"), ("카메라 위치", "2/5 SfM"), ("조밀복원", "4/5 조밀복원"),
+              ("흰 벽 채우기", "깊이 prior 모델 불러오기"), ("메쉬·텍스처", "메쉬 범위:"), ("내보내기·유니티", "5/5 정리"),
+              ("실사(스플랫) 마무리", "가우시안 스플래팅 완료 대기"), ("PGSR 평면 메쉬", "$ PGSR 학습"),
+              ("MeshSplatting", "$ MeshSplatting 학습")]
+PLAN_ALIAS = {"사람·차량 가림": "카메라 위치", "카메라 위치(AI)": "카메라 위치", "조밀 점(AI)": "조밀복원"}
+
+
+def _tqdm_frac(log: Path) -> float | None:
+    """PGSR·MeshSplatting 학습 기록의 진행 막대(… 3150/7000 …) → 진행 비율"""
+    try:
+        with open(log, "rb") as f:
+            f.seek(max(0, log.stat().st_size - 4000))
+            tail = f.read().decode("utf-8", "replace")
+        m = re.findall(r"(\d+)/(\d+) \[", tail)
+        return int(m[-1][0]) / max(1, int(m[-1][1])) if m else None
+    except Exception:
+        return None
+
+
+def plan_speed(mode: str) -> float:
+    """이 PC 의 계획 대비 실제 비율(같은 모드 최근 5건 중앙값, 0.6~2.0) — 기록이 없으면 1"""
+    r = [h["ratio"] for h in _hist() if h.get("ratio") and h.get("mode", "").endswith(mode)][-5:]
+    return float(min(2.0, max(0.6, sorted(r)[len(r) // 2]))) if r else 1.0
+
+
+def count_inputs(path: Path) -> tuple[int, float]:
+    """폴더의 사진 수(영상은 뽑을 장면 수로 어림)와 사진 화소(백만, 앞쪽 몇 장 평균)"""
+    n, mps = 0, []
+    vids = 0
+    for q in sorted(path.rglob("*")) if path.is_dir() else [path]:
+        e = q.suffix.lower()
+        if e in IMG_EXT:
+            n += 1
+            if len(mps) < 6:
+                try:
+                    from PIL import Image
+                    with Image.open(q) as im:
+                        mps.append(im.size[0] * im.size[1] / 1e6)
+                except Exception:
+                    pass
+        elif e in {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".insv"}:
+            vids += 1
+    if vids:
+        n += max(30, 150 // vids) * vids
+    return n, (sum(mps) / len(mps) if mps else 2.0)
+
+
+def plan_progress(d: Path, lines: list[str], job: dict) -> tuple[int, int] | None:
+    """계획 기반 진행률·남은 분. 계획이 아직 없으면 None(예전 방식 사용).
+    남은 시간 = 지금 단계의 남은 몫(실제 진행이 보이면 그 속도로) + 아직 시작 안 한 단계의 계획 시간 × 이번 작업 속도"""
+    try:
+        pl = json.loads((d / "out" / "work" / "plan.json").read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    pred = {}
+    for k, v in pl.get("stages_min", {}).items():
+        k = PLAN_ALIAS.get(k, k)
+        pred[k] = pred.get(k, 0.0) + float(v) * 60
+    pred["마무리"] = 0.4 * pred.get("내보내기·유니티", 90)  # 품질 보고서·유니티 패키지(맨 끝)
+    pred["내보내기·유니티"] = 0.6 * pred.get("내보내기·유니티", 90)
+    seen = {}
+    for ln in lines:
+        m = re.match(r"\[\s*([\d.]+)s\]\s+(.*)", ln)
+        if not m:
+            continue
+        for name, mark in PLAN_MARKS:
+            if name not in seen and mark in m.group(2):
+                seen[name] = float(m.group(1))
+        if "마무리" not in seen and "품질 보고서" in m.group(2):
+            seen["마무리"] = float(m.group(1))
+    el = time.time() - (job.get("started") or time.time())
+    order = [n for n, _ in PLAN_MARKS] + ["마무리"]
+    started = sorted((t, n) for n, t in seen.items())
+    if not started:
+        return None
+    cur_t, cur = started[-1]
+    # 끝난 단계의 실제/계획 비율(중앙값) → 남은 단계에 곱한다
+    ratios = []
+    for (t0, n0), (t1, _) in zip(started, started[1:]):
+        if pred.get(n0, 0) > 20:
+            ratios.append((t1 - t0) / pred[n0])
+    speed = min(3.0, max(0.5, sorted(ratios)[len(ratios) // 2])) if ratios else 1.0
+    e_cur = el - cur_t
+    frac = None
+    w = d / "out" / "work"
+    if cur == "조밀복원":
+        try:
+            dd = w / "dense" / "stereo" / "depth_maps"
+            total = len(list((w / "dense" / "images").rglob("*.jpg")))
+            if total and dd.exists():
+                frac = 0.5 * (len(list(dd.glob("*.photometric.bin"))) + len(list(dd.glob("*.geometric.bin")))) / total
+        except Exception:
+            pass
+    elif cur == "PGSR 평면 메쉬":
+        frac = _tqdm_frac(w / "pgsr" / "pgsr.log")
+    elif cur == "MeshSplatting":
+        frac = _tqdm_frac(w / "meshsplat" / "meshsplat.log")
+    elif cur == "실사(스플랫) 마무리":
+        pr = splat_progress(d)
+        frac = pr[0] / pr[1] if pr and pr[1] else None
+    p_cur = pred.get(cur, 60) * speed
+    if frac and frac > 0.03:
+        rem_cur = max(e_cur * (1 - frac) / frac, 0.0)
+    else:
+        rem_cur = max(p_cur - e_cur, 0.1 * p_cur)
+    later = [n for n in order[order.index(cur) + 1:] if n not in seen]
+    rem = rem_cur + sum(pred.get(n, 0) * speed for n in later)
+    pct = int(min(99, 100 * el / max(el + rem, 1)))
+    return pct, max(1, int(round(rem / 60)))
+
+
 def overall_progress(d: Path, lines: list[str], step: int, job: dict) -> tuple[int, int | None]:
     """전체 진행률(%)과 남은 시간(분).
     예전: (지금까지 걸린 시간 ÷ 진행률) — 단계마다 걸리는 시간이 크게 달라(3D 생성이 대부분) 앞쪽에서 너무 짧게 잡혔다.
@@ -508,6 +626,8 @@ def overall_progress(d: Path, lines: list[str], step: int, job: dict) -> tuple[i
     n = _n_images(d, lines, job)
     spi = _spi(mode)
     exp = {k: spi[k] * n for k in spi}
+    if job.get("extras") and job.get("mode") == "fast":  # PGSR·MeshSplatting(5단계 끝에 이어서) — 1Family 152장 약 25분
+        exp["5"] = exp.get("5", 0) + 10.0 * n
     starts = {}  # 단계 시작 시각(처리 시작 후 초)
     for ln in lines:
         m = re.match(r"\[\s*([\d.]+)s\]\s+(\d)/5\s", ln)
@@ -570,7 +690,7 @@ def job_view(job: dict) -> dict:
         cam = next((ln.split("촬영 기종:", 1)[1].strip() for ln in lines if "촬영 기종:" in ln), None)
         if cam:
             v["camera"] = cam
-        v["pct"], v["eta_min"] = overall_progress(d, lines, step, job)
+        v["pct"], v["eta_min"] = plan_progress(d, lines, job) or overall_progress(d, lines, step, job)
         human = [ln for ln in lines if "$ " not in ln and ln.strip()]  # 실행 명령(경로 덩어리)은 숨김
         v["last_log"] = re.sub(r"^\[\s*[\d.]+s\]\s*", "", human[-1]).strip()[-160:] if human else ""
         last = lines[-1] if lines else ""
@@ -654,6 +774,7 @@ def run_job(jid: str) -> None:
     if tools["openmvs"]:
         env["OPENMVS_BIN"] = tools["openmvs"]
     env["PYTHONIOENCODING"] = "utf-8"
+    env["PHOTO3D_SPEED"] = str(plan_speed({"best": "best", "instant": "instant"}.get(job.get("mode"), "fast")))
     src = job.get("local_path") or str(d / "input")
     profile = {"best": "gpu-max", "instant": "instant"}.get(job.get("mode"), "fast")
     cmd = [sys.executable, "-m", "photo3d", "run", src, "--profile", profile, "--out", str(d / "out"),
@@ -668,6 +789,10 @@ def run_job(jid: str) -> None:
         cmd += ["--scale-dist", str(sc)]
     if job.get("subject"):
         cmd += ["--subject"]
+    if job.get("extras"):
+        cmd += ["--extras"]
+    if job.get("use_images"):
+        cmd += ["--use-images", str(int(job["use_images"]))]
     if resume:  # 이어서 처리: 끝난 단계·계산한 깊이 지도·점군 재사용
         cmd += ["--resume"]
     if no_prior:
@@ -1057,6 +1182,25 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"token": mobile.token(DATA), "tunnel": mobile.TUNNEL,
                                    "https": [f"https://{i}:{_HTTPS['port']}" for i in ips] if _HTTPS["port"] else [],
                                    "http": lan_urls(port)})
+            if p == "/api/plan":  # 시작 전 예상: ?n=사진 수(또는 path=PC 폴더)&mode=&kind=&use=&extras=
+                from . import timeplan
+                q = parse_qs(u.query)
+                g = lambda k, dflt=None: (q.get(k) or [dflt])[0]  # noqa: E731
+                mode = {"best": "best", "instant": "instant"}.get(g("mode"), "fast")
+                mp = float(g("mp", 2.0) or 2.0)
+                n = int(g("n", 0) or 0)
+                if g("path"):
+                    pth = Path(g("path"))
+                    if not self._is_local() or not pth.exists():
+                        return self._json({"error": "폴더를 찾을 수 없습니다"}, 400)
+                    n, mp = count_inputs(pth)
+                use = int(g("use")) if g("use") else None
+                ex = {"1": True, "0": False}.get(g("extras", ""), None)
+                sp = plan_speed(mode)
+                kind = g("kind", "fuse")
+                pl = timeplan.plan(max(n, 1), mode, kind, use, ex, mp, sp)
+                return self._json({"plan": pl, "curve": timeplan.curve(max(n, 1), mode, kind, ex, mp, sp),
+                                   "auto": timeplan.plan(max(n, 1), mode, kind, None, ex, mp, sp)["n_use"]})
             if p == "/api/gpu":
                 from . import gpu
                 g = gpu.query()
@@ -1251,6 +1395,7 @@ class Handler(BaseHTTPRequestHandler):
                        "created": time.time(), "local_path": lp or None,
                        "scale": b.get("scale") or None, "marker_size": b.get("marker_size") or None,
                        "mode": b.get("mode") if b.get("mode") in ("best", "instant") else "fast", "subject": bool(b.get("subject")),
+                       "extras": bool(b.get("extras")), "use_images": int(b["use_images"]) if b.get("use_images") else None,
                        "kind": b.get("kind") if b.get("kind") in ("pg", "fuse") else "splat"}
                 save_job(job)
                 return self._json(job, 201)
@@ -1283,6 +1428,10 @@ class Handler(BaseHTTPRequestHandler):
                 b = self._body_json()  # 폰 앱: 업로드가 끝난 뒤 고른 품질·방식
                 if b.get("mode") in ("fast", "best", "instant"):
                     job["mode"] = b["mode"]
+                if "use_images" in b:  # 시작 직전에 고른 사진 수(없으면 자동)
+                    job["use_images"] = int(b["use_images"]) if b.get("use_images") else None
+                if "extras" in b:
+                    job["extras"] = bool(b.get("extras"))
                 if b.get("kind") in ("splat", "pg", "fuse"):
                     job["kind"] = b["kind"]
                 job.update(status="queued", error=None)
