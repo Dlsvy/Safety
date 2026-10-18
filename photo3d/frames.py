@@ -310,6 +310,20 @@ def prepare_inputs(inputs: list[Path], out_dir: Path, max_side: int = 3200,
             hint = UNSUPPORTED_EXT.get(p.suffix.lower())
             raise ValueError(f"지원하지 않는 입력: {p.name}" + (f" — {hint}" if hint else ""))
     from . import cam360
+    # 똑같은 파일은 한 장만 — 압축 풀기·복사 실수로 같은 사진이 수백 장 들어가면(1Family 폴더: 240장이 8가지 사진의 복사본)
+    # 시차 0 인 짝이 쏟아져 COLMAP 글로벌 매퍼가 재삼각측량에서 몇 시간씩 멈췄다
+    import hashlib
+    seen, uniq, dup = set(), [], 0
+    for q in photos:
+        h = hashlib.md5(q.read_bytes()).hexdigest()
+        if h in seen:
+            dup += 1
+            continue
+        seen.add(h)
+        uniq.append(q)
+    if dup:
+        log(f"  똑같은 사진 {dup}장 제외(같은 파일이 여러 번 — 사진 {len(uniq)}장 사용)")
+        photos = uniq
     # 촬영 기종(사진 EXIF·영상 메타데이터·360 카메라 고유 문자열)
     models: dict = {}
     for q in (photos[:: max(1, len(photos) // 40)] + videos):  # 고르게 40장 안팎(드론·폰 섞인 경우도 잡히게)
