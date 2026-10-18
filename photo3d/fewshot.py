@@ -157,14 +157,26 @@ def dense_points(work: Path, rec, dst: Path, keep_conf: float = 0.3, max_points:
         return None
     poses = json.loads(pj.read_text(encoding="utf-8"))
     names = {rec.image(i).name: rec.image(i).projection_center() for i in rec.reg_image_ids()}
+    rot, obs = {}, {}  # 다듬은 카메라의 카메라→세계 회전, 그 사진에 보이는 삼각측량 점(픽셀, 깊이)
+    for i in rec.reg_image_ids():
+        im = rec.image(i)
+        T = np.asarray((im.cam_from_world() if callable(im.cam_from_world) else im.cam_from_world).matrix())
+        rot[im.name] = T[:3, :3].T
+        uv, z = [], []
+        for p2 in im.points2D:
+            if p2.has_point3D():
+                X = rec.points3D[p2.point3D_id].xyz
+                uv.append(p2.xy)
+                z.append(float(T[2, :3] @ X + T[2, 3]))
+        obs[im.name] = (np.array(uv).reshape(-1, 2), np.array(z))
     pairs = [(np.array(p["c2w"])[:3, 3], names[p["name"]]) for p in poses if p["name"] in names]
     if len(pairs) < 3:
         return None
     s, R, t = _sim3(np.array([a for a, _ in pairs]), np.array([b for _, b in pairs]))
     d = np.load(npz)
-    xyz, nrm, col = [], [], []
+    xyz, nrm, col, scales, dropped = [], [], [], [], 0
     for k, p in enumerate(poses):
-        if f"pts{k}" not in d:
+        if f"pts{k}" not in d or p["name"] not in names:
             continue
         P = d[f"pts{k}"].astype(np.float64)
         ok = d[f"mask{k}"] & np.isfinite(P).all(-1)
@@ -183,8 +195,31 @@ def dense_points(work: Path, rec, dst: Path, keep_conf: float = 0.3, max_points:
         n = n / np.maximum(nn, 1e-12)[..., None]
         cam = np.array(p["c2w"])[:3, 3]
         n[((cam - P) * n).sum(-1) < 0] *= -1
-        xyz.append(P[ok])
-        nrm.append(n[ok])
+        # 사진마다 '그 사진의 다듬은 카메라' 기준으로 옮긴다: MapAnything 카메라 좌표 → 축척 s → 다듬은 카메라 자세.
+        # 전체를 Sim3 하나로만 옮기면 번들 조정이 카메라를 따로따로 움직인 만큼 사진과 형상이 어긋난다
+        # (2Francis 12장: 카메라 맞춤 오차 중앙 1.4m). 이렇게 하면 각 사진에 대해 깊이가 정확히 그 화면과 맞는다.
+        Rm = np.array(p["c2w"])[:3, :3]
+        Pall = (P - cam) @ Rm            # 카메라 좌표(MapAnything), 격자 그대로
+        # 사진별 깊이 축척: 이 사진에 보이는 삼각측량 점(정확)의 깊이 ÷ 같은 픽셀의 AI 깊이 중앙값
+        # (AI 깊이는 사진마다 축척이 조금씩 다르다 — 전체 축척 하나만 쓰면 수십 cm 어긋남)
+        sk = s
+        uv, zt = obs[p["name"]]
+        Hh, Ww = P.shape[:2]
+        sc_ = max(Ww / p["W"], Hh / p["H"]) + 1e-8
+        u = np.round(uv[:, 0] * sc_ - (np.floor(p["W"] * sc_) - Ww) * 0.5 - 0.5).astype(int) if len(uv) else uv
+        v = np.round(uv[:, 1] * sc_ - (np.floor(p["H"] * sc_) - Hh) * 0.5 - 0.5).astype(int) if len(uv) else uv
+        if len(uv) >= 20:
+            inb = (u >= 0) & (v >= 0) & (u < Ww) & (v < Hh)
+            za = Pall[v[inb], u[inb], 2]
+            good = (za > 0) & (zt[inb] > 0)
+            if good.sum() >= 20:
+                sk = float(np.median(zt[inb][good] / za[good]))
+        if not 0.5 <= sk / s <= 2.0:  # 이 사진의 AI 깊이는 믿기 어렵다(1Family 12장 중 1장 5.3배) → 점을 쓰지 않는다
+            dropped += 1
+            continue
+        scales.append(sk / s)
+        xyz.append(sk * Pall[ok] @ rot[p["name"]].T + names[p["name"]])
+        nrm.append((n[ok] @ Rm) @ rot[p["name"]].T)
         col.append((d[f"rgb{k}"] if f"rgb{k}" in d else np.full(P.shape, 128, np.uint8))[ok])
     if not xyz:
         return None
@@ -192,8 +227,6 @@ def dense_points(work: Path, rec, dst: Path, keep_conf: float = 0.3, max_points:
     if len(xyz) > max_points:
         sel = np.random.default_rng(0).choice(len(xyz), max_points, replace=False)
         xyz, nrm, col = xyz[sel], nrm[sel], col[sel]
-    xyz = s * xyz @ R.T + t
-    nrm = nrm @ R.T
     data = np.zeros(len(xyz), dtype=[("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("nx", "<f4"), ("ny", "<f4"),
                                       ("nz", "<f4"), ("red", "u1"), ("green", "u1"), ("blue", "u1")])
     for i, k in enumerate(("x", "y", "z")):
@@ -203,5 +236,6 @@ def dense_points(work: Path, rec, dst: Path, keep_conf: float = 0.3, max_points:
     from .pointfilter import write_ply_raw
     write_ply_raw(data, dst)
     err = float(np.median([np.linalg.norm(s * R @ a + t - b) for a, b in pairs]))
-    log(f"  조밀 점(AI 깊이): {len(xyz):,}점 · 카메라 맞춤 오차 중앙 {err * 1000:.0f}mm (사진이 적어 COLMAP 조밀복원 대신)")
+    drop_txt = f"(어긋난 사진 {dropped}장 제외)" if dropped else ""
+    log(f"  조밀 점(AI 깊이): {len(xyz):,}점 · 사진별 깊이 축척 보정 {min(scales):.2f}~{max(scales):.2f}배{drop_txt} · 사진별로 다듬은 카메라에 맞춤(AI↔다듬은 위치 차이 중앙 {err * 1000:.0f}mm) — 사진이 적어 COLMAP 조밀복원 대신")
     return dst

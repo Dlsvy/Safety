@@ -450,6 +450,8 @@ def record_timing(d: Path, job: dict) -> None:
     try:
         r = json.loads((d / "out" / "report.json").read_text(encoding="utf-8"))
         n = int((r.get("input") or {}).get("images") or r["sfm"]["images_input"])
+        if job.get("mode") == "instant":
+            n = min(n, 12)
         st = {}
         for name, sec in (r.get("timing_s") or {}).items():
             m = re.match(r"(\d)/5", name)
@@ -474,6 +476,12 @@ def _spi(mode: str) -> dict:
 
 
 def _n_images(d: Path, lines: list[str], job: dict) -> int:
+    n = _n_images_raw(d, lines, job)
+    # 아주 빠르게는 많이 올려도 12장만 골라 쓴다(cli.INSTANT_PICK) — 302장으로 계산해 '154분 남음'으로 나왔다
+    return min(n, 12) if job.get("mode") == "instant" else n
+
+
+def _n_images_raw(d: Path, lines: list[str], job: dict) -> int:
     for ln in reversed(lines):
         m = re.search(r"특징점 추출 \((\d+)장", ln) or re.search(r"사진 \d+장 중 (\d+)장 사용", ln) or \
             re.search(r"등록 \d+/(\d+)장", ln)
