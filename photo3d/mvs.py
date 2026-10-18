@@ -187,7 +187,8 @@ def _poisson_input(fused: Path, rec, dst: Path, base_depth: int, log=print) -> t
         k = xyz[keep]
         sp = float(np.median(cKDTree(k).query(k[:: max(1, len(k) // 20000)], k=2, workers=-1)[0][:, 1]))
         ext = float((hi - lo).max())
-        depth = int(np.clip(np.ceil(np.log2(ext / max(2 * sp, 1e-9))), base_depth, min(base_depth + 1, 12)))
+        up = 0 if base_depth <= 10 else 1  # 빠르게(draft)는 올리지 않는다 — 깊이 11 이면 면이 4배(1Family 74장 347만 면, 메쉬·텍스처 7분)
+        depth = int(np.clip(np.ceil(np.log2(ext / max(2 * sp, 1e-9))), base_depth, min(base_depth + up, 12)))
         log(f"  메쉬 범위: {', '.join(f'{v:.1f}' for v in hi - lo)} m (점 {keep.mean():.0%} 사용) · Poisson 깊이 {depth}"
             f" · 칸 {ext / 2 ** depth * 100:.1f}cm")
         return src, depth, ext / 2 ** depth

@@ -1,6 +1,6 @@
 """시간 기준 처리 계획 — 모드마다 목표 시간 안에 끝나도록 쓸 사진 수·설정을 정하고, 단계별 예상 시간을 낸다.
 
-목표: 아주 빠르게 3~7분 · 빠르게 15~20분 · 최고 품질 50~70분(사진이 많으면 고르게 퍼진 선명한 사진만 골라 쓴다).
+목표: 아주 빠르게 10~15분 · 빠르게 25~30분 · 최고 품질 50~80분(사진이 많으면 고르게 퍼진 선명한 사진만 골라 쓴다).
 계수는 이 PC(RTX 5060 Ti 8GB) 실제 기록에서 맞췄다(2026-10-18, 1Family 152장·2Francis 302장·8장 시험):
   짝 맞추기 192초/152장(사진 수 제곱), 증분 매퍼 190초/152장(1.5제곱), PatchMatch 1600px·이웃 20장 10.8초/장
   (2000px 13.3초/장, 이웃 7장 6.7초/장 → 장당 3.15 + 0.508×이웃 수, 해상도에 비례), MoGe 깊이 보조 0.8초/장,
@@ -11,19 +11,20 @@ from __future__ import annotations
 
 import math
 
-TARGET_MIN = {"instant": (3, 7), "fast": (15, 20), "best": (50, 70)}
-# 모드별 고정 설정(사진 수만 계획으로 정한다). 빠르게도 흰 벽 채우기(MoGe)는 켠다 — 타설 후 콘크리트 내부·지하처럼
-# 무늬 없는 벽이 주 대상이라 구멍을 줄이는 효과가 크고 74장 기준 1~2분이다
+TARGET_MIN = {"instant": (10, 15), "fast": (25, 30), "best": (50, 80)}
+# 모드별 고정 설정(사진 수만 계획으로 정한다). 흰 벽 채우기(MoGe)는 모두 켠다 — 타설 후 콘크리트 내부·지하처럼
+# 무늬 없는 벽이 주 대상이라 구멍을 줄이는 효과가 크다.
+# 아주 빠르게(2026-10-19 사용자: AI 만으로는 품질이 떨어짐): COLMAP 카메라·조밀복원(1600px)로, 카메라를 못 잡으면 MapAnything.
 SETTINGS = {
-    "instant": {"sfm": "ai", "dense": "ai", "pm_size": 0, "pm_src": 0, "prior": False, "splat_steps": 3000,
-                "splat_cap": 300_000, "extras": False, "pgsr_steps": 0, "ms_steps": 0},
-    "fast": {"sfm": "colmap", "dense": "colmap", "pm_size": 1600, "pm_src": 10, "prior": True, "splat_steps": 7000,
-             "splat_cap": 1_000_000, "extras": False, "pgsr_steps": 7000, "ms_steps": 10000},
-    "best": {"sfm": "colmap", "dense": "colmap", "pm_size": 2400, "pm_src": 16, "prior": True, "splat_steps": 20000,
-             "splat_cap": 2_000_000, "extras": True, "pgsr_steps": 10000, "ms_steps": 15000},
+    "instant": {"sfm": "colmap", "dense": "colmap", "pm_size": 1600, "pm_src": 8, "prior": True, "splat_steps": 7000,
+                "splat_cap": 1_000_000, "extras": False, "pgsr_steps": 0, "ms_steps": 0, "best_mesh": False},
+    "fast": {"sfm": "colmap", "dense": "colmap", "pm_size": 2000, "pm_src": 12, "prior": True, "splat_steps": 10000,
+             "splat_cap": 1_500_000, "extras": False, "pgsr_steps": 7000, "ms_steps": 10000, "best_mesh": True},
+    "best": {"sfm": "colmap", "dense": "colmap", "pm_size": 2400, "pm_src": 16, "prior": True, "splat_steps": 30000,
+             "splat_cap": 3_000_000, "extras": True, "pgsr_steps": 15000, "ms_steps": 20000, "best_mesh": True},
 }
-MIN_IMAGES = {"instant": 3, "fast": 8, "best": 8}
-MAX_IMAGES = {"instant": 12, "fast": 400, "best": 600}
+MIN_IMAGES = {"instant": 15, "fast": 40, "best": 60}  # 품질 하한 — 시간이 넘쳐도 이 아래로는 줄이지 않고 "목표보다 김"으로 알린다
+MAX_IMAGES = {"instant": 40, "fast": 150, "best": 400}
 
 
 def stages(n: int, mode: str, kind: str = "fuse", extras: bool | None = None, mp: float = 2.0) -> dict:
@@ -46,17 +47,24 @@ def stages(n: int, mode: str, kind: str = "fuse", extras: bool | None = None, mp
         st["조밀복원"] = n * (3.15 + 0.508 * src) * (s["pm_size"] / 2000) + 0.4 * n  # + 융합·정리
     if s["prior"]:
         st["흰 벽 채우기"] = 30 + 0.8 * n
-    st["메쉬·텍스처"] = (80 if mode == "instant" else 150 if mode == "fast" else 260) + 0.2 * n
+    # 메쉬·텍스처: 1Family 74장 422초(Poisson 깊이 11 — 빠르게는 이제 10), 12장 약 80초
+    st["메쉬·텍스처"] = (150 + 3.0 * n) if mode == "best" else (60 + 1.6 * n)
+    # 끝부분(실측, 사진 수에 비례): 내보내기·바닥 정사영상 74장 190초·12장 60초, 스플랫 마무리(바닥 교체·통합 정리)
+    # 74장 150초, 빈 곳 메운 최적 합성 메쉬 74장 233초·12장 50초, 최적 합성 74장 80초(정리 재사용 후)
+    st["내보내기·유니티"] = 40 + 2.2 * n
     if kind in ("splat", "fuse"):
-        # 스플랫은 조밀 점이 나오면 GPU 로 동시에 돈다 — 본 처리보다 오래 걸리는 만큼만 기다린다
-        train = s["splat_steps"] * (0.035 if mode != "best" else 0.045)
-        after = st["메쉬·텍스처"] + (st.get("흰 벽 채우기", 0))
-        st["실사(스플랫) 마무리"] = max(0.0, train - after) + (60 if kind == "fuse" else 30)
-    st["내보내기·유니티"] = 150 if mode != "instant" else 110
-    if kind == "fuse" and s["extras"] and mode != "instant":
+        train = s["splat_steps"] * 0.028 * (1.5 if s["splat_cap"] > 2_000_000 else 1.0)  # 7000스텝 약 196초(100만 개)
+        # 통합(fuse)은 측정 메쉬로 만든 표면 방향 지도를 쓰므로 메쉬가 끝난 뒤 학습을 시작한다 → 내보내기와만 겹친다
+        overlap = st["내보내기·유니티"] + (0 if kind == "fuse" else st["메쉬·텍스처"] + st.get("흰 벽 채우기", 0))
+        st["실사(스플랫) 마무리"] = max(0.0, train - overlap) + ((80 + 0.9 * n) if kind == "fuse" else 40)
+    if kind == "fuse" and s["extras"]:
         # PGSR: 1000스텝 54초(불러오기·TSDF 포함), 다른 프로그램이 GPU 를 쓰면 7000스텝 20분까지 늘었다 → 보통 값으로 두고 speed 로 보정
         st["PGSR 평면 메쉬"] = 30 + s["pgsr_steps"] * 0.06 * min(1.0, 0.4 + n / 250)
+    if kind == "fuse" and (s["best_mesh"] or s["extras"]):
+        st["최적 합성 메쉬"] = 40 + 2.7 * n
+    if kind == "fuse" and s["extras"]:
         st["MeshSplatting"] = 30 + s["ms_steps"] * 0.043 * min(1.0, 0.5 + n / 300)
+    st["마무리"] = ((20 + 0.8 * n) if kind == "fuse" else 10) + 15  # 최적 합성·보고서(유니티 패키지는 받을 때 만든다)
     return st
 
 
@@ -76,7 +84,8 @@ def plan(n_avail: int, mode: str, kind: str = "fuse", n_use: int | None = None, 
     if n_use is None:
         n = cap
         # 목표 상한을 넘으면 사진 수를 줄인다(최고 품질은 먼저 추가 기술의 스텝을 지키고, 그래도 넘으면 사진 수)
-        while n > MIN_IMAGES[mode] and total(n, ex) > hi:
+        goal = lo + 0.7 * (hi - lo)  # 상한에 딱 맞추면 조금만 늦어도 넘는다 → 범위의 70% 지점을 겨냥
+        while n > MIN_IMAGES[mode] and total(n, ex) > goal:
             n = max(MIN_IMAGES[mode], int(n * 0.92))
         auto = True
     else:

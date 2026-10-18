@@ -367,7 +367,7 @@ CMD_LABELS = [
     ("stereo_fusion", "깊이 지도 합치기(조밀 점군 만들기)"),
     ("feature_extractor", "GPU 특징점 찾기"), ("exhaustive_matcher", "GPU 사진끼리 짝 맞추기"),
     ("sequential_matcher", "GPU 사진끼리 짝 맞추기"), ("global_mapper", "카메라 위치 계산(글로벌)"),
-    ("mapper", "카메라 위치 계산(증분) — 글로벌 결과와 비교"), ("poisson_mesher", "메쉬 만들기"),
+    ("mapper", "카메라 위치 계산"), ("poisson_mesher", "메쉬 만들기"),
     ("ReconstructMesh", "메쉬 만들기"), ("TextureMesh", "사진 색 입히기"), ("DensifyPointCloud", "CPU 깊이 계산"),
 ]
 
@@ -509,7 +509,7 @@ def _n_images_raw(d: Path, lines: list[str], job: dict) -> int:
 PLAN_MARKS = [("입력 정리", "1/5 입력 정리"), ("카메라 위치", "2/5 SfM"), ("조밀복원", "4/5 조밀복원"),
               ("흰 벽 채우기", "깊이 prior 모델 불러오기"), ("메쉬·텍스처", "메쉬 범위:"), ("내보내기·유니티", "5/5 정리"),
               ("실사(스플랫) 마무리", "가우시안 스플래팅 완료 대기"), ("PGSR 평면 메쉬", "$ PGSR 학습"),
-              ("MeshSplatting", "$ MeshSplatting 학습")]
+              ("최적 합성 메쉬", "최적 합성 메쉬:"), ("MeshSplatting", "$ MeshSplatting 학습"), ("마무리", "최적 합성: 스플랫")]
 PLAN_ALIAS = {"사람·차량 가림": "카메라 위치", "카메라 위치(AI)": "카메라 위치", "조밀 점(AI)": "조밀복원"}
 
 
@@ -564,8 +564,6 @@ def plan_progress(d: Path, lines: list[str], job: dict) -> tuple[int, int] | Non
     for k, v in pl.get("stages_min", {}).items():
         k = PLAN_ALIAS.get(k, k)
         pred[k] = pred.get(k, 0.0) + float(v) * 60
-    pred["마무리"] = 0.4 * pred.get("내보내기·유니티", 90)  # 품질 보고서·유니티 패키지(맨 끝)
-    pred["내보내기·유니티"] = 0.6 * pred.get("내보내기·유니티", 90)
     seen = {}
     for ln in lines:
         m = re.match(r"\[\s*([\d.]+)s\]\s+(.*)", ln)
@@ -574,10 +572,8 @@ def plan_progress(d: Path, lines: list[str], job: dict) -> tuple[int, int] | Non
         for name, mark in PLAN_MARKS:
             if name not in seen and mark in m.group(2):
                 seen[name] = float(m.group(1))
-        if "마무리" not in seen and "품질 보고서" in m.group(2):
-            seen["마무리"] = float(m.group(1))
     el = time.time() - (job.get("started") or time.time())
-    order = [n for n, _ in PLAN_MARKS] + ["마무리"]
+    order = [n for n, _ in PLAN_MARKS]
     started = sorted((t, n) for n, t in seen.items())
     if not started:
         return None
@@ -774,6 +770,7 @@ def run_job(jid: str) -> None:
     if tools["openmvs"]:
         env["OPENMVS_BIN"] = tools["openmvs"]
     env["PYTHONIOENCODING"] = "utf-8"
+    env["PHOTO3D_LAZY_UNITY"] = "1"
     env["PHOTO3D_SPEED"] = str(plan_speed({"best": "best", "instant": "instant"}.get(job.get("mode"), "fast")))
     src = job.get("local_path") or str(d / "input")
     profile = {"best": "gpu-max", "instant": "instant"}.get(job.get("mode"), "fast")

@@ -205,7 +205,7 @@ def _quat_from_z(n: np.ndarray) -> np.ndarray:
     return q / np.linalg.norm(q, axis=1, keepdims=True)
 
 
-def make_best(out: Path, work: Path, max_backing: int = 1_500_000, log=print) -> dict | None:
+def make_best(out: Path, work: Path, max_backing: int = 1_500_000, agree: dict | None = None, log=print) -> dict | None:
     """'최적 합성' 모델(site_best.ply, 가우시안 스플랫 형식):
     스플랫의 장점(실사 같은 형태·얇은 물체·자연스러운 색) + 포토그래메트리의 장점(속이 꽉 찬 면).
     1) 측정 표면 뒤에 숨은 스플랫·표면에서 먼 잡티 제거(mesh_prune_and_agree)
@@ -222,11 +222,16 @@ def make_best(out: Path, work: Path, max_backing: int = 1_500_000, log=print) ->
         return None
     meshp = pick_mesh(work / "mvs")
     dense = work / "dense" / "fused.ply" if (work / "dense" / "fused.ply").exists() else work / "mvs" / "scene_dense.ply"
-    tmp = out / "_best_tmp.ply"
-    info = mesh_prune_and_agree(sp, meshp or mesh_p, work / "dense" / "sparse", dense if dense.exists() else None,
-                                tmp, log=lambda *_: None)
-    a, props, _ = read_splat(tmp)
-    tmp.unlink(missing_ok=True)
+    if agree and agree.get("tau_m"):
+        # 통합 탭: site_splat.ply 는 이미 같은 정리(mesh_prune_and_agree)를 거쳤다 → 다시 하지 않는다(사진 74장 약 60초)
+        info = agree
+        a, props, _ = read_splat(sp)
+    else:
+        tmp = out / "_best_tmp.ply"
+        info = mesh_prune_and_agree(sp, meshp or mesh_p, work / "dense" / "sparse", dense if dense.exists() else None,
+                                    tmp, log=lambda *_: None)
+        a, props, _ = read_splat(tmp)
+        tmp.unlink(missing_ok=True)
     col = {q: i for i, q in enumerate(props)}
     tau = info["tau_m"]
     m = trimesh.load(mesh_p, process=False, force="mesh")

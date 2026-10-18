@@ -364,7 +364,9 @@ def run(a) -> dict:
                                           iterations=getattr(a, "pgsr_steps", 0) or (30000 if a.profile == "gpu-max" else 7000), log=log)
                             if gm is not None:
                                 rep["fuse"]["shape_mesh"] = "pgsr"
-                        if gm is None:
+                        if gm is None and a.profile == "fast" and not a.extras:
+                            log("  최적 합성 메쉬 생략(빠르게 — 측정 메쉬·스플랫은 그대로, 약 4분 절약)")
+                        elif gm is None:
                             gm = splat.mesh_from_splat(side["splat"], work / "splat" / "gs_mesh", log=log)
                             if gm is not None:
                                 rep["fuse"]["shape_mesh"] = "spirula"
@@ -415,7 +417,7 @@ def run(a) -> dict:
         if (out / "site_splat.ply").exists():
             try:  # 최적 합성: 스플랫(형태·실사) + 포토그래메트리 면(속이 꽉 찬 표면) — 뷰어 '최적 합성'
                 from . import fuse
-                rep["best"] = fuse.make_best(out, work, log=log)
+                rep["best"] = fuse.make_best(out, work, agree=(rep.get("fuse") or {}).get("agree"), log=log)
             except Exception as e:
                 log(f"  최적 합성 생략: {e}")
     rep["elapsed_min"] = round((time.time() - t0) / 60, 1)
@@ -430,6 +432,8 @@ def run(a) -> dict:
     except Exception as e:
         log(f"  품질 보고서 생략: {e}")
     try:  # 유니티에서 더블클릭으로 바로 가져가는 패키지(OBJ + 스크립트 + 자동 프리팹)
+        if os.environ.get("PHOTO3D_LAZY_UNITY") == "1":  # 앱: '유니티 파일'을 누를 때 표시까지 넣어 새로 만든다(여기서 만들면 중복 70초)
+            raise RuntimeError("앱에서 받을 때 만듭니다")
         from .unitypkg import write_unity_package
         write_unity_package(out, a.name or Path(a.out).resolve().parent.name, log=log)
     except Exception as e:
