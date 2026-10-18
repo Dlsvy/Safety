@@ -1072,9 +1072,18 @@ async function loadSplat(frame, keep = false) {
       sceneRevealMode: GS.SceneRevealMode.Instant, sphericalHarmonicsDegree: nsp > 4e6 ? 1 : 2,
       antialiased: !!(splatMeta && splatMeta.antialiased)});   // 가운데부터 서서히 나타나는 효과 끔(느린 PC·비교 보기에서 일부만 보임)
     // 스플랫은 Z-up(측량 좌표), 메쉬 GLB 는 Y-up → X축 -90° 회전으로 맞춘다
-    await splatView.addSplatScene(`/files/${curJob.id}/${useBest ? "site_best.ply" : "site_splat.ply"}`,
-      {rotation: [-Math.SQRT1_2, 0, 0, Math.SQRT1_2], showLoadingUI: false, splatAlphaRemovalThreshold: 5,
-       format: GS.SceneFormat.Ply});
+    // 압축본(.spz)부터: 원본 PLY 는 수백 MB(1Family 최적 합성 683MB) → .spz 는 약 1/13(44MB)이라 훨씬 빨리 뜬다.
+    // 없거나 못 읽으면 원본 PLY 로
+    const base = useBest ? "site_best" : "site_splat";
+    let ok = false;
+    for (const [f, fmt] of [[base + ".spz", GS.SceneFormat.Spz], [base + ".ply", GS.SceneFormat.Ply]]) {
+      try {
+        await splatView.addSplatScene(`/files/${curJob.id}/${f}`,
+          {rotation: [-Math.SQRT1_2, 0, 0, Math.SQRT1_2], showLoadingUI: false, splatAlphaRemovalThreshold: 5, format: fmt});
+        ok = true; break;
+      } catch (e) { console.warn("스플랫 불러오기 실패, 다음 형식으로:", f, e); }
+    }
+    if (!ok) throw new Error("실사 파일을 읽지 못함");
     scene.add(splatView);
     if (frame) await frameFrom("site_model.glb");
     $("vinfo").textContent = keep ? "겹쳐 보기: 실사 + 측정 메쉬(실사가 빈 곳) · 거리 재기·표시는 메쉬 기준 · 더블클릭: 회전 중심"
