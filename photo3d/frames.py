@@ -434,7 +434,7 @@ def prepare_inputs(inputs: list[Path], out_dir: Path, max_side: int = 3200,
             if only_pano and len(PANO_SIZES) == 1 else None,
             # 렌즈가 여럿(드론+폰, 사진+영상 프레임)이면 카메라 하나로 묶지 않는다 — MipMap 의 '공중·지상 통합'처럼
             # 섞어 넣었을 때 렌즈 하나로 강제하면 정합이 깨진다. COLMAP 은 크기·초점이 같은 연속 사진끼리 렌즈를 공유한다
-            "single_camera": pano_n == 0 and len(models) <= 1 and not (photos and videos),
+            "single_camera": pano_n == 0 and len(set(models) - {"알 수 없음"}) <= 1 and not (photos and videos),  # EXIF 없는 사진은 같은 카메라로 본다
             # 리그 설정: 방향 폴더마다 카메라 하나, 첫 방향 기준 회전(이동 0)
             "rig": [{"prefix": view_folder(y, p) + "/", "cam_from_rig": pano_rotation(y, p).T.tolist()}
                     for (y, p) in PANO_VIEWS] if pano_n else None}
