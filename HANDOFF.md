@@ -153,9 +153,13 @@ README.md 에 전체 설명·검증 결과가 있다. 먼저 README 를 읽어�
   'AI 세계 만들기' → 방향이 고르게 퍼진 8장 + azimuth(cameras.json) → reconstruct_images → 약 5분 뒤 ai_world.spz·충돌 GLB·파노라마·
   metric_scale_factor. 뷰어는 X축 180°·축척·바닥 높이 적용. 키는 app_data/worldlabs_key.txt(이 PC 만), 유료·사진이 외부로 나감 → 확인 창.
   실제 생성은 사용자 키가 없어 미검증.
-- **WorldMirror(Tencent, ATLAS 와 비슷한 공개 모델)**: third_party/worldmirror(torch 2.7.1 cu128, pycolmap 3.12.6, gsplat 없이 import 패치).
-  12장 추론 393초로 MapAnything(약 60초)보다 느림, gaussians.ply 저장까지 확인(영상 렌더링은 gsplat 없어 실패) — 파이프라인 미연결.
+- **WorldMirror(Tencent, ATLAS 와 비슷한 공개 모델)**: 12장 추론 393초로 MapAnything(약 60초)보다 느려 사용자 요청으로 삭제(설치 폴더·가중치 캐시).
+  다시 필요하면 scripts/gpu/setup_worldmirror_windows.ps1(torch 2.7.1 cu128, pycolmap 3.12.6, gsplat 없이 import 패치 필요).
 - 용량 정리(2026-10-19): 시험 작업·빈 작업·out/·설치 압축 삭제, 남긴 작업은 중간 파일(깊이 지도·학습 저장본·특징점 DB)만 삭제 → 92→49GB.
+- venv 합치기(2026-10-19): PGSR·MeshSplatting·MapAnything venv 는 torch 2.7.1 cu128 등 같은 파일이 많아 meshsplat·mapanything 의
+  같은 파일(1,479개, 12.2GB)을 pgsr/venv 로의 하드 링크로 바꿈(scripts/gpu/dedupe_venvs.py). third_party 실사용 약 21→10GB.
+  패키지 버전 충돌(open3d 0.19 고정 등) 때문에 venv 를 하나로 합치지는 않음 — 폴더는 셋 그대로, 디스크만 공유.
+  확인: MapAnything 8장 43초, PGSR 500스텝 TSDF 2.69M면, MeshSplatting 500스텝 mesh.ply 모두 정상.
 - 주의: APP.bat 창이 두 개 뜨면 같은 app_data 를 같이 써서, 나중에 켜진 앱이 처리 중 작업을 '앱이 다시 시작되어 중단됨'으로 바꾼다.
 
 ## ▶ 지금 이어서 할 일 (2026-10-18 사용자 피드백 — 로컬 PC 세션에서 진행)
