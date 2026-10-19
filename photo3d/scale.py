@@ -459,6 +459,12 @@ def georeference(rec: pycolmap.Reconstruction, image_dir: Path, marker_size: flo
                 s, R, t, rmse, how = _gps_fit(rec, ks, name2id, src, dst, log)
                 n = len(ks)
                 rms_spread = float(np.sqrt(np.mean(np.sum((dst[:, :2] - dst[:, :2].mean(0)) ** 2, 1))))
+            if spread > 5.0 and rmse > 0.5 * rms_spread:
+                # 실내·한자리 촬영: GPS 흔들림이 촬영 범위만큼 크다(2026-10-19 실내 인물 40장: 오차 10.9 m / 범위 12 m)
+                # → GPS 로 맞추면 크기가 엉터리. 버리고 다음 방법(마커·AI 추정 미터·축척 1)으로
+                log(f"  사진 GPS 무시: 맞춤 오차 {rmse:.1f} m 가 촬영 범위({spread:.0f} m)에 비해 너무 큼(실내 등)")
+                report["warnings"].append(f"사진 GPS 가 부정확해 쓰지 않음(맞춤 오차 {rmse:.1f} m, 범위 {spread:.0f} m)")
+            elif spread > 5.0:
                 # 축척의 표준오차 ≈ 위치 오차 / (촬영 범위 · √사진 수) — 예전 '맞춤 오차 ÷ 최대 범위'는 수 배 과대
                 report.update(method="gps_exif", gps_images=int(n), gps_fit_rmse_m=rmse, gps_fit=how,
                               gps_spread_m=spread, enu_origin_lla=ref.tolist(),

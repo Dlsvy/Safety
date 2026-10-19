@@ -1536,7 +1536,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "없는 경로"}, 404)
         try:
             job = load_job(m.group(1))
-        except KeyError:
+        except (KeyError, FileNotFoundError):  # 이미 지워짐(두 번 누름)
             return self._json({"error": "작업 없음"}, 404)
         if job["status"] in ("running",):
             return self._json({"error": "처리 중에는 지울 수 없습니다"}, 409)

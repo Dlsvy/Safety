@@ -160,6 +160,12 @@ README.md 에 전체 설명·검증 결과가 있다. 먼저 README 를 읽어�
   같은 파일(1,479개, 12.2GB)을 pgsr/venv 로의 하드 링크로 바꿈(scripts/gpu/dedupe_venvs.py). third_party 실사용 약 21→10GB.
   패키지 버전 충돌(open3d 0.19 고정 등) 때문에 venv 를 하나로 합치지는 않음 — 폴더는 셋 그대로, 디스크만 공유.
   확인: MapAnything 8장 43초, PGSR 500스텝 TSDF 2.69M면, MeshSplatting 500스텝 mesh.ply 모두 정상.
+- **AI(MapAnything) 멈춤 수정(2026-10-19, 홍정우 실내 인물 70장)**: COLMAP 이 17/40장만 잇자 40장을 AI 에 통째로 넣음 → 8GB 카드에서
+  Unity·NVIDIA 오버레이가 3.6GB 차지, VRAM 이 넘쳐 1,065초(18분). 이제 여유 VRAM 1GB 당 3.5장(12~40장)만 AI 에 넣고
+  나머지는 COLMAP 증분 SfM 이 AI 결과에 이어 붙임(fewshot.run, sparse_ext), 10분 넘으면 포기하고 COLMAP 결과로.
+  같은 사진: 152초에 29/40장(COLMAP 단독 17장, AI 40장 통째 40장·19.6분). 실측 표는 fewshot.max_views() 주석.
+  처리 중에는 Unity 를 닫아 두면 AI 가 훨씬 빠르다(빈 카드 8장 약 20초 vs 72초).
+- 사진 GPS 무시 기준(scale.py): 맞춤 오차가 촬영 범위 RMS 의 절반보다 크면(실내 — 오차 10.9 m/범위 12 m) GPS 로 축척을 맞추지 않음.
 - 주의: APP.bat 창이 두 개 뜨면 같은 app_data 를 같이 써서, 나중에 켜진 앱이 처리 중 작업을 '앱이 다시 시작되어 중단됨'으로 바꾼다.
 
 ## ▶ 지금 이어서 할 일 (2026-10-18 사용자 피드백 — 로컬 PC 세션에서 진행)

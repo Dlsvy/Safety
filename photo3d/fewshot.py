@@ -17,6 +17,19 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_IMAGES = 40  # 이보다 많으면 COLMAP 이 더 정확하고, MapAnything 은 VRAM(8GB)이 모자랄 수 있다
+TIMEOUT_S = 600  # 이보다 오래 걸리면 포기하고 COLMAP 결과로 계속(VRAM 이 넘쳐 공유 메모리로 가면 수십 분)
+
+
+def max_views() -> int:
+    """AI 에 한 번에 넣을 장수(나머지는 run() 에서 COLMAP 이 이어 붙인다). 2026-10-19 RTX 5060 Ti 8GB, Unity·오버레이가
+    3.6GB 차지(여유 4.5GB): 8장 72초·12장 117초·16장 177초·20장 313초, 40장 1065초 — 모두 VRAM 꽉 참(공유 메모리로 넘침).
+    빈 카드에서는 8장 약 20초. 여유 1GB 당 약 3.5장, 12~40장"""
+    try:
+        from . import gpu
+        free = ((gpu.query() or {}).get("mem_free_mb") or 0) / 1024
+    except Exception:
+        free = 0
+    return MAX_IMAGES if free <= 0 else int(max(12, min(MAX_IMAGES, free * 3.5)))
 
 
 def find() -> Path | None:
@@ -40,8 +53,9 @@ def _infer(img_dir: Path, work: Path, log) -> list[dict] | None:
         log("  적은 장수 보조(MapAnything) 미설치 — scripts/gpu/setup_mapanything_windows.ps1")
         return None
     names = sorted(p for p in img_dir.iterdir() if p.suffix.lower() in (".jpg", ".jpeg", ".png"))
-    if len(names) > MAX_IMAGES:
-        names = names[:: int(np.ceil(len(names) / MAX_IMAGES))]
+    cap = max_views()
+    if len(names) > cap:  # 촬영 순서대로 고르게
+        names = [names[int(i)] for i in np.linspace(0, len(names) - 1, cap).round()]
     work.mkdir(parents=True, exist_ok=True)
     lst = json.dumps([str(p) for p in names])
     if (work / "poses.json").exists() and (work / "poses_dense.npz").exists() and (work / "list.json").exists() \
@@ -50,12 +64,16 @@ def _infer(img_dir: Path, work: Path, log) -> list[dict] | None:
         return json.loads((work / "poses.json").read_text(encoding="utf-8"))
     (work / "poses.json").unlink(missing_ok=True)
     (work / "list.json").write_text(lst, encoding="utf-8")
-    log(f"  $ MapAnything: 사진 {len(names)}장으로 카메라 위치·렌즈 추정(GPU, 첫 실행은 가중치 내려받기)")
+    log(f"  $ MapAnything: 사진 {len(names)}장으로 카메라 위치·렌즈 추정(GPU, 최대 {TIMEOUT_S // 60}분)")
     with open(work / "mapanything.log", "w", encoding="utf-8", errors="replace") as lf:
-        rc = subprocess.run([str(py), "-I", str(Path(__file__).with_name("fewshot_runner.py")),
-                             str(work / "list.json"), str(work / "poses.json")],
-                            stdout=lf, stderr=subprocess.STDOUT, timeout=3600,
-                            env=_env()).returncode
+        try:
+            rc = subprocess.run([str(py), "-I", str(Path(__file__).with_name("fewshot_runner.py")),
+                                 str(work / "list.json"), str(work / "poses.json")],
+                                stdout=lf, stderr=subprocess.STDOUT, timeout=TIMEOUT_S,
+                                env=_env()).returncode
+        except subprocess.TimeoutExpired:
+            log(f"  MapAnything: {TIMEOUT_S // 60}분 넘게 걸려 중단 — COLMAP 결과로 계속")
+            return None
     if rc != 0 or not (work / "poses.json").exists():
         tail = (work / "mapanything.log").read_text(encoding="utf-8", errors="replace").strip().splitlines()[-3:]
         log("  MapAnything 실패: " + " | ".join(tail))
@@ -74,16 +92,18 @@ def run(img_dir: Path, work: Path, use_gpu: bool = True, log=print):
     db_path = work / "database.db"
     db_path.unlink(missing_ok=True)
     dev = pycolmap.Device.cuda if use_gpu else pycolmap.Device.auto
+    # AI 에 일부만 넣었으면(VRAM) 나머지 사진도 특징점을 뽑아 두고, 아래에서 COLMAP 이 AI 결과에 이어 붙인다
+    all_names = sorted(p.name for p in img_dir.iterdir() if p.suffix.lower() in (".jpg", ".jpeg", ".png"))
     reader = pycolmap.ImageReaderOptions()
     reader.camera_model = "SIMPLE_RADIAL"
     ext = pycolmap.FeatureExtractionOptions()
     ext.max_image_size = 3200
     ext.sift.max_num_features = 16000
     try:
-        pycolmap.extract_features(db_path, img_dir, image_names=sorted(by), camera_mode=pycolmap.CameraMode.SINGLE,
+        pycolmap.extract_features(db_path, img_dir, image_names=all_names, camera_mode=pycolmap.CameraMode.SINGLE,
                                   reader_options=reader, extraction_options=ext, device=dev)
     except Exception:
-        pycolmap.extract_features(db_path, img_dir, image_names=sorted(by), camera_mode=pycolmap.CameraMode.SINGLE,
+        pycolmap.extract_features(db_path, img_dir, image_names=all_names, camera_mode=pycolmap.CameraMode.SINGLE,
                                   reader_options=reader, extraction_options=ext)
     tv = pycolmap.TwoViewGeometryOptions()
     tv.min_num_inliers = 12  # 장수가 적고 시점 차이가 커서 짝마다 맞는 점이 적다
@@ -127,6 +147,21 @@ def run(img_dir: Path, work: Path, use_gpu: bool = True, log=print):
             return None
         pycolmap.bundle_adjustment(rec, ba)
         rec.write(out)
+    if len(all_names) > rec.num_reg_images():
+        try:  # AI 가 잡은 카메라를 출발점으로 나머지 사진 등록(증분 SfM 이어 하기)
+            ext_out = work / "sparse_ext"
+            ext_out.mkdir(exist_ok=True)
+            opts = pycolmap.IncrementalPipelineOptions()
+            opts.triangulation.ignore_two_view_tracks = False
+            opts.mapper.abs_pose_min_num_inliers = 15  # 기본 30 — 겹침이 적은 사진도 붙도록(이미 AI 로 틀이 잡혀 있다)
+            opts.mapper.abs_pose_min_inlier_ratio = 0.15
+            recs = pycolmap.incremental_mapping(db_path, img_dir, ext_out, opts, input_path=out)
+            best = max(recs.values(), key=lambda r: r.num_reg_images()) if recs else None
+            if best is not None and best.num_reg_images() > rec.num_reg_images():
+                log(f"  AI {rec.num_reg_images()}장에 이어 COLMAP 이 {best.num_reg_images() - rec.num_reg_images()}장 더 등록")
+                rec = best
+        except Exception as e:
+            log(f"  나머지 사진 이어 붙이기 실패: {str(e)[:120]}")
     rec, st = _finish({0: rec}, len(list(img_dir.iterdir())), log, robust=False)
     st["fewshot"] = {"engine": "MapAnything(apache)", "images": len(poses), "scale": "metric_estimate"}
     log(f"  적은 장수 복원: 사진 {st['images_registered']}장 · 3D점 {st['points3D']:,} · 재투영오차 "
