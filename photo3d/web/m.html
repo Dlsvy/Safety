@@ -60,10 +60,11 @@ button:disabled{opacity:.45}
   <div class="muted" id="conn">PC 연결 확인 중…</div>
   <h2>현장 이름</h2>
   <input type="text" id="name" maxlength="60" autocomplete="off">
-  <button class="big primary" id="bHybrid">🎬 영상 + 자동 사진 <span class="muted" style="color:#151719">(추천)</span></button>
+  <button class="big primary" id="bSpot" style="display:block;text-align:center;line-height:1.35;padding:10px 14px">🧭 공간 스캔 <span class="muted" style="color:#151719">(매터포트 방식 · 추천)</span><br>
+    <span class="muted" style="color:#151719;font-size:13px">한 자리에서 점만 따라 돌리면 자동 촬영 → 1.5~2m 옮겨 반복</span></button>
+  <button class="big" id="bHybrid">🎬 영상 + 자동 사진 <span class="muted">(건물 외부 한 바퀴)</span></button>
   <button class="big" id="bPhoto">📷 자동 사진만</button>
   <button class="big" id="bVideo">🎥 동영상 촬영</button>
-  <button class="big" id="bSpot">🧭 공간 스캔 <span class="muted">(실내·좁은 곳)</span></button>
   <div class="row">
     <label class="btn" for="fCam">📸 기본 카메라</label>
     <label class="btn" for="fPick">🖼 앨범에서 고르기</label>
@@ -77,12 +78,26 @@ button:disabled{opacity:.45}
   <div id="jobs" class="muted">불러오는 중…</div>
   <h2>촬영 요령(앱이 자동으로 도와줍니다)</h2>
   <div class="muted">· 건물 둘레를 <b>천천히 걸으며</b> 한 바퀴(높은 건물은 두 바퀴: 멀리서 한 번, 가까이서 한 번)<br>
-    · 제자리에서 돌지 말고 <b>옆으로 걸으세요</b> — 앱이 겹침 70~80%마다 알아서 찍습니다<br>
+    · (건물 외부 · 영상/자동 사진) 제자리에서 돌지 말고 <b>옆으로 걸으세요</b> — 앱이 겹침 70~80%마다 알아서 찍습니다<br>
     · 흔들리거나 흐린 순간은 앱이 건너뜁니다 · 역광·유리·물웅덩이는 피하기<br>
     · <b>공간 스캔</b>(매터포트 방식): 한 곳에 서서 화면의 흰 점을 가운데 원에 맞추면 자동으로 찍힙니다
       (가운데·위·아래 줄 28장). 폰을 중심으로 돌고 팔꿈치는 몸에 붙이기 → 이전 위치가 보이는 곳으로 1.5~2m 옮겨 반복.
       방·복도·현장 내부처럼 둘레를 돌 수 없는 곳에 씁니다. 거울·유리 정면은 피하세요</div>
 </main>
+
+<section id="spotHelp" class="page" hidden>
+  <h1>공간 스캔 — 이렇게 찍어요</h1>
+  <div class="card"><b>① 한 자리에 섭니다</b><br><span class="muted">방·복도라면 가운데쯤. 팔꿈치를 몸에 붙이고 폰을 세로로 듭니다.</span></div>
+  <div class="card"><b>② 흰 점을 가운데 원에 맞춥니다</b><br><span class="muted">맞추고 잠깐 멈추면 자동으로 찍히고 다음 점이 나옵니다. 점이 화면 밖이면 화살표 방향으로 돌리세요.
+    폰은 제자리, 몸을 돌립니다.</span></div>
+  <div class="card"><b>③ 가운데 → 위 → 아래 줄 순서로 한 바퀴</b><br><span class="muted">한 자리 28장(바닥·천장 포함). '가운데 줄만'을 누르면 12장으로 빨라집니다.
+    오른쪽 위 고리가 다 차면 그 자리 끝.</span></div>
+  <div class="card"><b>④ 1.5~2m 옮겨서 반복</b><br><span class="muted">방금 선 자리가 보이는 곳으로 옮긴 뒤 찍기 버튼을 한 번 누르면 다음 자리를 시작합니다.
+    방마다·문 앞·모퉁이마다 한 번씩. 다 찍으면 '완료'.</span></div>
+  <p class="muted">거울·유리 정면, 너무 어두운 곳(지하는 작업등)은 피하세요. 같은 자리 사이가 2m 넘게 벌어지면 3D 가 끊길 수 있습니다.</p>
+  <button class="big primary" id="spotGo">알겠어요, 시작</button>
+  <button id="spotBack" style="width:100%">돌아가기</button>
+</section>
 
 <section id="cam" hidden>
   <video id="vid" playsinline muted autoplay></video>
@@ -102,6 +117,7 @@ button:disabled{opacity:.45}
   <div class="hud bot">
     <button class="small on" id="autoB">자동 ON</button>
     <button class="small on" id="rowsB" hidden>바닥·천장 포함</button>
+    <button class="small" id="helpB" hidden aria-label="공간 스캔 안내">?</button>
     <button id="shut" aria-label="찍기"></button>
     <button class="small" id="endB">완료</button>
   </div>
@@ -134,7 +150,7 @@ button:disabled{opacity:.45}
 "use strict";
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const show = (id) => { for (const s of ["home", "cam", "done", "pair"]) $(s).hidden = s !== id; };
+const show = (id) => { for (const s of ["home", "cam", "done", "pair", "spotHelp"]) $(s).hidden = s !== id; };
 const ls = { get: (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
              set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
 
@@ -349,7 +365,7 @@ function guide(text, sub, color) {
   $("frame").style.borderColor = color || "transparent";
 }
 function tick() {
-  const v = $("vid"); if (!v.videoWidth) return;
+  const v = $("vid"); if (!v.videoWidth || $("cam").hidden) return;  // 안내 화면을 보는 동안은 찍지 않는다
   const g = grab(), sm = small(g), sh = sharpness(g);
   A.sharpHist.push(sh); if (A.sharpHist.length > 40) A.sharpHist.shift();
   if (A.prev) {  // 프레임 사이 이동을 누적 → 마지막 사진 대비 겹침
@@ -523,7 +539,7 @@ async function startCapture(kind) {
   Object.assign(A, {prev: null, cx: 0, cy: 0, sharpHist: [], lastShot: 0, shots: 0, key: null, steadySince: performance.now()});
   A.bins.fill(0); wbLocked = false;
   if (kind === "spot" && SP.cnt) { SP.cnt = 0; SP.done.clear(); SP.yaw0 = null; }  // '더 찍기': 위치 번호는 이어서, 하다 만 한 바퀴는 처음부터
-  $("aim").hidden = $("rowsB").hidden = kind !== "spot";
+  $("aim").hidden = $("rowsB").hidden = $("helpB").hidden = kind !== "spot";
   $("guide").style.top = kind === "spot" ? "16%" : "";  // 공간 스캔: 가운데 원을 가리지 않게 위로
   drawRing();
   $("cnt").textContent = kind === "video" ? "영상 0개" : "0장";
@@ -542,7 +558,11 @@ function stopCapture() {
 $("bPhoto").onclick = () => startCapture("photo");
 $("bHybrid").onclick = () => startCapture("hybrid");
 $("bVideo").onclick = () => startCapture("video");
-$("bSpot").onclick = () => { Object.assign(SP, {spot: 1, done: new Set(), wait: false, cnt: 0, yaw0: null}); startCapture("spot"); };
+function spotStart() { Object.assign(SP, {spot: 1, done: new Set(), wait: false, cnt: 0, yaw0: null}); startCapture("spot"); }
+$("bSpot").onclick = () => { if (ls.get("p3d_spot_help", 0)) spotStart(); else show("spotHelp"); };  // 처음 한 번은 안내부터
+$("spotGo").onclick = () => { ls.set("p3d_spot_help", 1); if (mode === "spot" && stream) show("cam"); else spotStart(); };
+$("spotBack").onclick = () => { if (mode === "spot" && stream) show("cam"); else show("home"); };
+$("helpB").onclick = () => show("spotHelp");
 $("rowsB").onclick = () => {  // 바닥·천장 줄 포함(완전) ↔ 가운데 줄만(간편) — 매터포트의 complete/simple
   SP.full = !SP.full; $("rowsB").classList.toggle("on", SP.full); $("rowsB").textContent = SP.full ? "바닥·천장 포함" : "가운데 줄만";
   for (const id of [...SP.done]) if (id >= 100 && !SP.full) { SP.done.delete(id); }
