@@ -746,7 +746,7 @@ async function loadPreview(id, L) {
 }
 
 /* ── 폰 연결(QR) ── */
-let phoneAuto = false;  // 이번 창에서 자동으로 한 번만 켠다(사용자가 끄면 다시 켜지 않음)
+let phoneAuto = false, phoneTimer = null;  // 이번 창에서 자동으로 한 번만 켠다(사용자가 끄면 다시 켜지 않음)
 async function phoneUpdate() {
   try {
     const d = await api("/api/mobile/info"), t = encodeURIComponent(d.token);
@@ -758,11 +758,13 @@ async function phoneUpdate() {
     if (!tu.state || tu.state === "off") {
       if (!phoneAuto) { phoneAuto = true; await api("/api/mobile/tunnel", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({on: true})}).catch(() => {}); return phoneUpdate(); }
     }
-    qr("pqr2", tu.url ? `${tu.url}/m?t=${t}` : "", tu.state === "starting" ? "주소 만드는 중… (10초 정도)" : tu.state === "error" ? "주소를 못 만들었습니다<br>오른쪽 와이파이 QR 을 쓰거나<br>아래 버튼으로 다시" : "아래 버튼을 누르면<br>QR 이 나옵니다");
+    qr("pqr2", tu.url ? `${tu.url}/m?t=${t}` : "", tu.state === "starting" ? (tu.msg || "주소 만드는 중…").replace(" — ", "<br>") : tu.state === "error" ? "주소를 못 만들었습니다<br>오른쪽 와이파이 QR 을 쓰거나<br>아래 버튼으로 다시" : "아래 버튼을 누르면<br>QR 이 나옵니다");
     $("pu2").textContent = tu.url ? tu.url : (tu.msg || "");
     $("tunb").textContent = tu.state === "on" || tu.state === "starting" ? "어디서나 접속 끄기" : "어디서나 접속 켜기";
     $("tunb").dataset.on = tu.state === "on" || tu.state === "starting" ? "1" : "";
-    if (tu.state === "starting" && $("phoned").open) setTimeout(phoneUpdate, 1500);
+    // 창이 열려 있는 동안 계속 새로 고친다 — 주소 등록 대기·끊김 뒤 자동 재연결로 주소가 바뀌면 QR 도 바로 바뀐다
+    clearTimeout(phoneTimer);
+    if ($("phoned").open) phoneTimer = setTimeout(phoneUpdate, tu.state === "starting" ? 1500 : 5000);
   } catch (e) { $("pu1").textContent = "연결 정보를 가져오지 못했습니다: " + e.message; }
 }
 $("phoneb").onclick = () => { $("phoned").showModal(); phoneUpdate(); };
