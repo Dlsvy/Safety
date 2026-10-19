@@ -152,7 +152,9 @@ README.md 에 전체 설명·검증 결과가 있다. 먼저 README 를 읽어�
 - **ATLAS(World Labs)**: 얼리 액세스(API·가중치 없음). 같은 회사 Marble API 를 붙임(photo3d/marble.py): 끝난 작업에서
   'AI 세계 만들기' → 방향이 고르게 퍼진 8장 + azimuth(cameras.json) → reconstruct_images → 약 5분 뒤 ai_world.spz·충돌 GLB·파노라마·
   metric_scale_factor. 뷰어는 X축 180°·축척·바닥 높이 적용. 키는 app_data/worldlabs_key.txt(이 PC 만), 유료·사진이 외부로 나감 → 확인 창.
-  실제 생성은 사용자 키가 없어 미검증.
+  실제 생성 확인(2026-10-20, 홍정우 8장): 약 6분, 1,600 크레딧 정도(가입 보너스 7,000), spz 30MB·500k 7.8MB·충돌 GLB·파노라마.
+  고친 것: 업로드 응답은 media_asset.media_asset_id(문서 예시 id 와 다름), 실패 시 marble.json state=error(화면에 '다시 만들기'),
+  AI 세계 카메라는 자체 좌표(원점=촬영 자리, 바닥 0) 방 안 눈높이 — 측정 메쉬(GPS 좌표)로 잡으면 허공을 봄. Y-down→X 180° 는 맞음(바닥 +y 확인).
 - **WorldMirror(Tencent, ATLAS 와 비슷한 공개 모델)**: 12장 추론 393초로 MapAnything(약 60초)보다 느려 사용자 요청으로 삭제(설치 폴더·가중치 캐시).
   다시 필요하면 scripts/gpu/setup_worldmirror_windows.ps1(torch 2.7.1 cu128, pycolmap 3.12.6, gsplat 없이 import 패치 필요).
 - 용량 정리(2026-10-19): 시험 작업·빈 작업·out/·설치 압축 삭제, 남긴 작업은 중간 파일(깊이 지도·학습 저장본·특징점 DB)만 삭제 → 92→49GB.
