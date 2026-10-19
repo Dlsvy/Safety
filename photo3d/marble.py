@@ -49,7 +49,8 @@ def _upload(path: Path, key: str) -> str:
     req = urllib.request.Request(info["upload_url"], data=path.read_bytes(), method=info.get("upload_method", "PUT"),
                                  headers=hdr)
     urllib.request.urlopen(req, timeout=300).close()  # noqa: S310
-    return r["media_asset"]["id"]
+    ma = r["media_asset"]
+    return ma.get("media_asset_id") or ma["id"]  # 실제 응답은 media_asset_id(문서 예시는 id, 2026-10-20 확인)
 
 
 def pick_views(out: Path, n: int = 8) -> list[tuple[Path, float]]:
@@ -126,8 +127,10 @@ def generate(out: Path, n_images: int = 8, model: str = "marble-1.1", name: str 
         if time.time() - t0 > 30 * 60:
             save(state="error", msg="30분 넘게 끝나지 않음")
             raise RuntimeError("Marble 생성 시간 초과")
-    wid = (r.get("response") or {}).get("id") or (r.get("metadata") or {}).get("world_id")
-    world = _call("GET", f"/worlds/{wid}", key)["world"]
+    resp = r.get("response") or {}
+    wid = resp.get("world_id") or resp.get("id") or (r.get("metadata") or {}).get("world_id")
+    world = resp if resp.get("assets") else _call("GET", f"/worlds/{wid}", key)
+    world = world.get("world", world)
     a = world.get("assets") or {}
     spz = (a.get("splats") or {}).get("spz_urls") or {}
     got = {}
@@ -157,5 +160,15 @@ if __name__ == "__main__":
     try:
         generate(Path(a.out), a.images, a.model, a.name)
     except Exception as e:
-        print(f"Marble 실패: {e}", file=sys.stderr)
+        msg = f"{type(e).__name__}: {e}"
+        if hasattr(e, "read"):  # HTTP 오류면 서버가 알려 준 이유까지
+            try:
+                msg += " — " + e.read().decode("utf-8", "replace")[:300]
+            except Exception:
+                pass
+        st = Path(a.out) / "marble.json"
+        cur = json.loads(st.read_text(encoding="utf-8")) if st.exists() else {}
+        cur.update(state="error", msg=f"AI 세계 실패: {msg}", t=time.time())
+        st.write_text(json.dumps(cur, ensure_ascii=False), encoding="utf-8")
+        print(f"Marble 실패: {msg}", file=sys.stderr)
         sys.exit(1)
