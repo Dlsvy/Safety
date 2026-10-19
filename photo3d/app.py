@@ -723,6 +723,11 @@ def job_view(job: dict) -> dict:
     v["has_best"] = (d / "out" / "site_best.ply").exists()
     v["has_best_mesh"] = (d / "out" / "site_best_mesh.glb").exists()
     v["has_opaque"] = (d / "out" / "site_opaque_mesh.glb").exists()
+    v["has_ai_world"] = (d / "out" / "ai_world.spz").exists()  # World Labs Marble 'AI 세계'(생성형, 보기용)
+    try:
+        v["marble"] = json.loads((d / "out" / "marble.json").read_text(encoding="utf-8"))
+    except Exception:
+        v["marble"] = None
     v["has_ortho"] = (d / "out" / "site_ground_ortho.jpg").exists()
     v["has_survey"] = (d / "out" / "site_ortho.jpg").exists()
     v["has_las"] = (d / "out" / "site_points.las").exists()
@@ -1336,6 +1341,31 @@ class Handler(BaseHTTPRequestHandler):
                 subprocess.Popen(["powershell", "-NoProfile", "-Command",
                                   f"Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File \"{ps1}\"'"],
                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                return self._json({"ok": True})
+            if p == "/api/marble/key":  # World Labs API 키 저장(이 PC 에서만, app_data 에만 둔다)
+                if not self._is_local():
+                    return self._json({"error": "PC 에서만"}, 403)
+                k = (self._body_json().get("key") or "").strip()
+                (DATA / "worldlabs_key.txt").write_text(k, encoding="utf-8")
+                return self._json({"ok": True, "set": bool(k)})
+            m_ = re.fullmatch(r"/api/jobs/([0-9a-f]{12})/marble", p)
+            if m_:  # 이 작업 사진으로 Marble 'AI 세계' 만들기(클라우드, 유료) — 이 PC 에서만
+                if not self._is_local():
+                    return self._json({"error": "PC 에서만"}, 403)
+                from . import marble
+                if not marble.api_key(DATA):
+                    return self._json({"error": "API 키 없음", "need_key": True}, 400)
+                job = load_job(m_.group(1))
+                out = job_dir(job["id"]) / "out"
+                if not (out / "work" / "images").exists():
+                    return self._json({"error": "끝난 작업의 사진이 없습니다"}, 400)
+                (out / "marble.json").write_text(json.dumps({"state": "starting", "msg": "시작 중", "t": time.time()}),
+                                                 encoding="utf-8")
+                env = {**os.environ, "PYTHONIOENCODING": "utf-8", "WORLDLABS_API_KEY": marble.api_key(DATA)}
+                with open(out / "marble.log", "w", encoding="utf-8") as lf:
+                    subprocess.Popen([sys.executable, "-m", "photo3d.marble", str(out), "--name", job.get("name") or job["id"]],
+                                     cwd=str(ROOT), stdout=lf, stderr=subprocess.STDOUT, env=env,
+                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 return self._json({"ok": True})
             if p == "/api/mobile/tunnel":  # 현장(인터넷)에서도 폰으로 접속 — 켜기/끄기(이 PC 에서만)
                 if not self._is_local():

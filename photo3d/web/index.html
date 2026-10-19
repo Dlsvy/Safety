@@ -361,6 +361,7 @@ canvas.spark.big{width:100%;height:34px}
     <span class="t" id="vt"></span>
     <button id="splatb" aria-pressed="false" hidden>실사 보기</button>
     <button id="bestb" aria-pressed="false" hidden title="최적 합성: 스플랫(실사 형태) + 포토그래메트리 면(속이 꽉 찬 표면) — 비쳐 보이던 지붕·벽이 막힘">최적 합성</button>
+    <button id="aiwb" aria-pressed="false" hidden title="World Labs Marble 로 만든 'AI 세계' — 사진에 없는 곳까지 그럴듯하게 채운 생성형(보기·설명용, 치수는 측정 메쉬로). 사진 8장이 World Labs 서버로 가고 크레딧이 듭니다">AI 세계</button>
     <button id="ovlb" aria-pressed="false" hidden title="실사(스플랫) 뒤에 측정 메쉬를 깔아 구멍을 메움 — 거리 재기·표시는 메쉬 기준">겹쳐 보기</button>
     <button id="cmpb" aria-pressed="false" hidden title="왼쪽 실사(스플래팅)·오른쪽 메쉬(포토그래메트리)를 나란히 — 한쪽을 돌리면 같이 돕니다">나란히 비교</button>
     <a class="btn" id="dlspz" hidden download title="실사(스플랫) 압축본 — SuperSplat·Postshot 등에서 열림, 원본의 약 1/10">실사 .spz</a>
@@ -1025,6 +1026,10 @@ async function openViewer(j) {
   if (j.has_splat) await api(`/files/${j.id}/report.json`).then((r) => {
     ovlPush = (r.fuse && r.fuse.agree && r.fuse.agree.tau_m) || 0; splatMeta = r.splat || null; }).catch(() => {});
   $("opqb").hidden = !j.has_opaque; useOpq = false;
+  // AI 세계(Marble): 이 PC 에서 연 끝난 작업이면 버튼(없으면 '만들기', 만드는 중이면 진행 표시)
+  useAI = false; aiMeta = j.marble || null;
+  $("aiwb").hidden = !(j.status === "done" && ["localhost", "127.0.0.1"].includes(location.hostname));
+  $("aiwb").textContent = j.has_ai_world ? "AI 세계" : (aiMeta && /starting|uploading|generating/.test(aiMeta.state) ? "AI 세계 만드는 중…" : "AI 세계 만들기");
   $("fillb").hidden = !j.has_filled; $("estb").hidden = !j.has_est; $("splatb").hidden = !j.has_splat;
   $("ssedit").hidden = !j.has_splat; $("dlspz").hidden = !j.has_splat;
   $("dlspz").href = `/files/${j.id}/site_splat.spz?dl=${encodeURIComponent(j.name + ".spz")}`;
@@ -1043,6 +1048,7 @@ async function openViewer(j) {
 }
 let useFill = false, showEst = false, estModel = null, useSplat = false, splatView = null, useOvl = false, ovlPush = 0, splatMeta = null;
 function syncToggles(){
+  $("aiwb").classList.toggle("on", useAI); $("aiwb").setAttribute("aria-pressed", useAI);
   $("splatb").classList.toggle("on", useSplat); $("splatb").setAttribute("aria-pressed", useSplat);
   $("ovlb").classList.toggle("on", useOvl); $("ovlb").setAttribute("aria-pressed", useOvl);
   $("bestb").classList.toggle("on", useSplat && useBest); $("bestb").setAttribute("aria-pressed", useSplat && useBest);
@@ -1061,7 +1067,7 @@ async function clearScene() {
   if (splatView) { scene.remove(splatView); try { await splatView.dispose(); } catch (e) {} splatView = null; }
   clearMarks();
 }
-let useBest = false, useOpq = false;
+let useBest = false, useOpq = false, useAI = false, aiMeta = null;
 async function loadSplat(frame, keep = false) {
   if (!keep) await clearScene();
   $("vinfo").textContent = "실사(가우시안 스플래팅) 불러오는 중… 큰 파일은 수십 초 걸립니다";
@@ -1076,12 +1082,15 @@ async function loadSplat(frame, keep = false) {
     // 스플랫은 Z-up(측량 좌표), 메쉬 GLB 는 Y-up → X축 -90° 회전으로 맞춘다
     // 압축본(.spz)부터: 원본 PLY 는 수백 MB(1Family 최적 합성 683MB) → .spz 는 약 1/13(44MB)이라 훨씬 빨리 뜬다.
     // 없거나 못 읽으면 원본 PLY 로
-    const base = useBest ? "site_best" : "site_splat";
+    const base = useAI ? "ai_world" : useBest ? "site_best" : "site_splat";
     let ok = false;
     for (const [f, fmt] of [[base + ".spz", GS.SceneFormat.Spz], [base + ".ply", GS.SceneFormat.Ply]]) {
       try {
+        // Marble 은 OpenCV 방향(아래 +y) → X축 180°, 실측 축척(metric_scale_factor)·바닥 높이 적용. 우리 스플랫은 Z-up → X축 -90°
+        const ms = (useAI && aiMeta && aiMeta.metric_scale_factor) || 1, go = (useAI && aiMeta && aiMeta.ground_plane_offset) || 0;
         await splatView.addSplatScene(`/files/${curJob.id}/${f}`,
-          {rotation: [-Math.SQRT1_2, 0, 0, Math.SQRT1_2], showLoadingUI: false, splatAlphaRemovalThreshold: 5, format: fmt});
+          useAI ? {rotation: [1, 0, 0, 0], scale: [ms, ms, ms], position: [0, go, 0], showLoadingUI: false, format: fmt}
+                : {rotation: [-Math.SQRT1_2, 0, 0, Math.SQRT1_2], showLoadingUI: false, splatAlphaRemovalThreshold: 5, format: fmt});
         ok = true; break;
       } catch (e) { console.warn("스플랫 불러오기 실패, 다음 형식으로:", f, e); }
     }
@@ -1193,12 +1202,27 @@ function loadEst() {
   });
 }
 $("cmpb").onclick = () => setCompare(!cmpOn);
-$("ovlb").onclick = () => { useOpq = false; useOvl = !useOvl; if (useOvl) { useSplat = false; useFill = false; showEst = false; if (cmpOn) setCompare(false); }
+$("ovlb").onclick = () => { useAI = false; useOpq = false; useOvl = !useOvl; if (useOvl) { useSplat = false; useFill = false; showEst = false; if (cmpOn) setCompare(false); }
   else useSplat = true; syncToggles(); loadModel(false); };
-$("bestb").onclick = () => { useOpq = false; useBest = true; useSplat = true; useOvl = false; showEst = false; setMeasure(false); syncToggles(); loadModel(false); };
-$("splatb").onclick = () => { useOpq = false; if (useSplat && useBest) { useBest = false; syncToggles(); loadModel(false); return; } useBest = false; useOvl = false; useSplat = !useSplat; if (useSplat) { showEst = false; setMeasure(false); } else if (cmpOn) setCompare(false); syncToggles(); loadModel(false); };
-$("opqb").onclick = () => { useOpq = !useOpq; if (useOpq) { useSplat = false; useOvl = false; useFill = false; showEst = false; if (cmpOn) setCompare(false); } syncToggles(); loadModel(false); };
-$("fillb").onclick = () => { useOpq = false; useFill = !useFill; if (!useFill) showEst = false; syncToggles(); loadModel(false); };
+$("aiwb").onclick = async () => {
+  const j = curJob;
+  if (j.has_ai_world) { useAI = !useAI; useBest = false; useOpq = false; useOvl = false; useSplat = useAI || useSplat; syncToggles(); loadModel(!useAI ? false : true); return; }
+  if (aiMeta && /starting|uploading|generating/.test(aiMeta.state)) { alert(aiMeta.msg || "만드는 중입니다"); return; }
+  if (!confirm("World Labs Marble 로 'AI 세계'를 만듭니다.\n\n· 이 작업 사진 8장이 World Labs 서버로 올라갑니다\n· 유료 크레딧이 듭니다(한 번에 약 1~2달러)\n· 사진에 없는 곳도 그럴듯하게 채운 생성형이라 보기·설명용입니다(치수는 측정 메쉬로)\n\n진행할까요?")) return;
+  let r = await fetch(`/api/jobs/${j.id}/marble`, {method: "POST"}).then((x) => x.json());
+  if (r.need_key) {
+    const k = prompt("World Labs API 키를 넣어 주세요 (platform.worldlabs.ai → API keys). 이 PC 에만 저장됩니다.");
+    if (!k) return;
+    await api("/api/marble/key", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({key: k})});
+    r = await fetch(`/api/jobs/${j.id}/marble`, {method: "POST"}).then((x) => x.json());
+  }
+  if (r.error) { alert(r.error); return; }
+  $("aiwb").textContent = "AI 세계 만드는 중…"; $("vinfo").textContent = "AI 세계(Marble) 만드는 중 — 약 5분. 끝나면 'AI 세계' 버튼으로 봅니다";
+};
+$("bestb").onclick = () => { useAI = false; useOpq = false; useBest = true; useSplat = true; useOvl = false; showEst = false; setMeasure(false); syncToggles(); loadModel(false); };
+$("splatb").onclick = () => { useAI = false; useOpq = false; if (useSplat && useBest) { useBest = false; syncToggles(); loadModel(false); return; } useBest = false; useOvl = false; useSplat = !useSplat; if (useSplat) { showEst = false; setMeasure(false); } else if (cmpOn) setCompare(false); syncToggles(); loadModel(false); };
+$("opqb").onclick = () => { useAI = false; useOpq = !useOpq; if (useOpq) { useSplat = false; useOvl = false; useFill = false; showEst = false; if (cmpOn) setCompare(false); } syncToggles(); loadModel(false); };
+$("fillb").onclick = () => { useAI = false; useOpq = false; useFill = !useFill; if (!useFill) showEst = false; syncToggles(); loadModel(false); };
 $("estb").onclick = () => { showEst = !showEst; syncToggles();
   if (showEst) loadEst(); else if (estModel) { scene.remove(estModel); estModel = null; } };
 $("close").onclick = () => { setCompare(false); $("viewer").classList.remove("on"); setTool(null); };

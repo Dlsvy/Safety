@@ -146,6 +146,16 @@ README.md 에 전체 설명·검증 결과가 있다. 먼저 README 를 읽어�
   앱: /api/plan(시작 전 예상·사진 수별 곡선), 화면에 사진 수 막대·그래프(눌러서 정함), use_images·extras 를 작업에 저장.
   남은 시간은 plan.json 단계 + 처리 기록 표시글(PLAN_MARKS) + 실제 진행(깊이 지도 수·학습 스텝)으로(app.plan_progress),
   끝나면 실제/계획 비율을 timing_history 에 남겨 다음 계획에 곱한다(plan_speed).
+- **폰 QR(2026-10-19)**: 임시 터널 주소가 Cloudflare DNS 에 오르기까지 약 60초 — QR 은 DoH+직접 TLS 로 '바깥에서 열림'을
+  확인한 뒤에만 표시(mobile._reachable), 3분 대기·새 터널 재시도·1분마다 점검·끊기면 재연결. PC 창은 열려 있는 동안 계속 새로 고침.
+- **공간 스캔(매터포트 방식)**: 폰 첫 화면 맨 위 추천 버튼 + 처음 한 번 4단계 안내(spotHelp), 촬영 중 '?'로 다시 보기(그동안 자동 촬영 멈춤).
+- **ATLAS(World Labs)**: 얼리 액세스(API·가중치 없음). 같은 회사 Marble API 를 붙임(photo3d/marble.py): 끝난 작업에서
+  'AI 세계 만들기' → 방향이 고르게 퍼진 8장 + azimuth(cameras.json) → reconstruct_images → 약 5분 뒤 ai_world.spz·충돌 GLB·파노라마·
+  metric_scale_factor. 뷰어는 X축 180°·축척·바닥 높이 적용. 키는 app_data/worldlabs_key.txt(이 PC 만), 유료·사진이 외부로 나감 → 확인 창.
+  실제 생성은 사용자 키가 없어 미검증.
+- **WorldMirror(Tencent, ATLAS 와 비슷한 공개 모델)**: third_party/worldmirror(torch 2.7.1 cu128, pycolmap 3.12.6, gsplat 없이 import 패치).
+  12장 추론 393초로 MapAnything(약 60초)보다 느림, gaussians.ply 저장까지 확인(영상 렌더링은 gsplat 없어 실패) — 파이프라인 미연결.
+- 용량 정리(2026-10-19): 시험 작업·빈 작업·out/·설치 압축 삭제, 남긴 작업은 중간 파일(깊이 지도·학습 저장본·특징점 DB)만 삭제 → 92→49GB.
 - 주의: APP.bat 창이 두 개 뜨면 같은 app_data 를 같이 써서, 나중에 켜진 앱이 처리 중 작업을 '앱이 다시 시작되어 중단됨'으로 바꾼다.
 
 ## ▶ 지금 이어서 할 일 (2026-10-18 사용자 피드백 — 로컬 PC 세션에서 진행)
